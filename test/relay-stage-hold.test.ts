@@ -25,7 +25,7 @@ type Run = Awaited<ReturnType<typeof runVector>> & { res: HoldResult; resAt: num
  * The hover vector with the hold's watch on, then the stage's hold. `shot(t)` gives the pixels of a read at the fake
  * clock's time (null: no data), `there(t)` the element read; `during(r)` runs at the hold's call (timers of a test).
  */
-async function hold(o: { seed?: number; maxMs?: number; shot?: (t: number) => string | null; there?: (t: number) => boolean; during?: (r: Omit<Run, "res" | "resAt">) => void; watch?: boolean; vector?: any; hook?: (s: Sent) => any; setup?: (t: FakeTab) => void } = {}): Promise<Run> {
+async function hold(o: { seed?: number; maxMs?: number; shot?: (t: number) => string | null; there?: (t: number) => boolean; during?: (r: Omit<Run, "res" | "resAt">) => void; watch?: boolean; vector?: any; hook?: (s: Sent) => any; setup?: (t: FakeTab) => void; noAttach?: boolean } = {}): Promise<Run> {
   let hovered = 0, holdFrom = -1, res: HoldResult | undefined, resAt = -1;
   let tab!: FakeTab;
   // The hold starts 60 ms after the check's stop goes (the MCP's answer of its hover, then the transport's call).
@@ -34,7 +34,7 @@ async function hold(o: { seed?: number; maxMs?: number; shot?: (t: number) => st
     o.during?.({ tab, stage: tab.stage, clock: tab.clock, hovered, holdFrom } as any);
     void tab.stage.hold(tab, { maxMs: o.maxMs ?? 6000 }).then((x) => { res = x; resAt = tab.clock.now(); });
   };
-  const r = await runVector(o.vector ?? vec("hover"), { seed: o.seed ?? 5, tab: (t) => {
+  const r = await runVector(o.vector ?? vec("hover"), { seed: o.seed ?? 5, ...(o.noAttach ? { noAttach: true } : {}), tab: (t) => {
     tab = t;
     o.setup?.(t);
     if (o.watch !== false) { (t as any).holdHover = () => true; (t as any).hovered = () => { hovered++; }; }
@@ -377,6 +377,87 @@ test("board ab-t30.35, m4: the frame's end is that frame's own: a new document o
   if (r.res.ok) assert.equal(r.res.end, "limit", "the hold runs to its limit");
   const p = pressOf(r), q = releaseOf(r);
   assert.ok(Math.abs(q.t - p.t - 3000) <= 1e-6, `the release at maxMs (${q.t - p.t})`);
+});
+
+/** The hover's DOM.describeNode of the button in the frame (aimPoint): `t` is the test's fake tab. */
+const isAimRead = (s: Sent) => s.method === "DOM.describeNode" && s.child === "child" && s.params.objectId === "7.3.10";
+const frameReload = (t: FakeTab, id = "F-xf") => t.stage.event(t, "child", "Page.frameNavigated", { frame: { id, parentId: id === "F-xf" ? "main" : "F-xf", url: "http://frame.test/again" } });
+
+test("board ab-t30.36: a new document of the target's cross-origin frame, or the end of its session, during the hover's DOM.describeNode that gets no answer in time: no press, and the answer says that the element is gone", async () => {
+  for (const how of ["reload", "detach"] as const) {
+    let t!: FakeTab;
+    const r = await hold({ vector: crossHover(), shot: (x) => `f${x}`, setup: (x) => { t = x; }, hook: (s) => {
+      if (!isAimRead(s)) return undefined;
+      // The frame loads a new document (or its session ends) while the hover reads the target's node; the read gets no answer.
+      if (how === "reload") frameReload(t); else t.stage.event(t, undefined, "Target.detachedFromTarget", { sessionId: "child" });
+      return new Promise(() => {});
+    } });
+    assert.equal(r.stage.counts.holdNoNode, 1, `${how}: no backendNodeId in time`);
+    assert.deepEqual(r.res, { ok: false, why: HOLD_NOT.gone }, how);
+    assert.equal(pressOf(r), undefined, `${how}: no press`);
+    assert.equal(r.stage.counts.holdFrameLoads, 1, how);
+    assert.equal(r.stage.lock.held, 0, `${how}: the lock is free`);
+  }
+});
+
+test("board ab-t30.36: a new document of the target's cross-origin frame while the hover waits for the input lock (another tab holds a button): no press", async () => {
+  let t!: FakeTab, other: FakeTab | null = null, reloadAt = -1, aimAt = -1;
+  const r = await hold({ vector: crossHover(), shot: (x) => `f${x}`, setup: (x) => {
+    t = x;
+    // Another tab presses and holds its button for 1.5 s from the start: its action keeps the input lock, so the hover's
+    // path waits for it after the frame mapping.
+    other = new FakeTab({ ...vec("hover"), in: [] }, x.clock, { id: 2 });
+    other.stage = x.stage;
+    other.queue(undefined, "Input.dispatchMouseEvent", { type: "mousePressed", x: 500, y: 400, button: "left", buttons: 1, clickCount: 1, modifiers: 0, force: 0.5 }, () => {});
+    x.clock.timer(1500, () => other!.queue(undefined, "Input.dispatchMouseEvent", { type: "mouseReleased", x: 500, y: 400, button: "left", buttons: 0, clickCount: 1, modifiers: 0 }, () => {}));
+    x.clock.timer(500, () => { reloadAt = x.clock.now(); frameReload(t); });
+  }, hook: (s) => {
+    if (!isAimRead(s)) return undefined;
+    aimAt = t.clock.now();
+    return new Promise(() => {});
+  } });
+  assert.ok(reloadAt > 0 && aimAt > reloadAt, `the frame loaded during the hover's wait for the lock (${reloadAt}), before its read of the node (${aimAt})`);
+  assert.ok(t.sent.some((s) => s.method === "DOM.getFrameOwner") && t.sent.find((s) => s.method === "DOM.getFrameOwner")!.t < reloadAt, "the frame mapping ran before the new document");
+  assert.deepEqual(r.res, { ok: false, why: HOLD_NOT.gone });
+  assert.equal(pressOf(r), undefined, "no press");
+  assert.equal(r.stage.counts.holdFrameLoads, 1);
+  await r.clock.advance(3000);
+  assert.equal(r.stage.lock.held, 0, "the lock is free");
+});
+
+test("board ab-t30.36: the frame's id not known at the hover's setup (no attach record: the frame mapping reads it): a new document of that frame before the read counts, and one of another frame of its session does not", async () => {
+  for (const which of ["F-xf", "F-inner"] as const) {
+    let t!: FakeTab;
+    const r = await hold({ vector: crossHover(), noAttach: true, maxMs: 1500, shot: (x) => `f${x}`, setup: (x) => { t = x; }, hook: (s) => {
+      // The frame mapping's read of the session's target: the frame loads a new document before its answer.
+      if (s.method === "Target.getTargetInfo" && s.child === "child") { frameReload(t, which); return undefined; }
+      return isAimRead(s) ? new Promise(() => {}) : undefined;
+    } });
+    assert.ok(r.tab.sent.some((s) => s.method === "Target.getTargetInfo" && s.child === "child"), `${which}: the mapping read the frame's id`);
+    if (which === "F-xf") {
+      assert.deepEqual(r.res, { ok: false, why: HOLD_NOT.gone });
+      assert.equal(pressOf(r), undefined, "no press");
+      assert.equal(r.stage.counts.holdFrameLoads, 1);
+    } else {
+      assert.ok(r.res.ok && pressOf(r), `${which}: the press goes`);
+      assert.equal(r.res.ok && r.res.end, "limit", `${which}: the hold runs to its limit`);
+      assert.equal(r.stage.counts.holdFrameLoads, undefined);
+    }
+  }
+});
+
+test("board ab-t30.36: a hover that kept no target (its frame mapping failed) keeps no frame record: a new document of the frame during that hover or during the hold does not end the hold (C11's limit, as before)", async () => {
+  let t!: FakeTab, kept: unknown = "unread";
+  const r = await hold({ vector: crossHover(), maxMs: 1500, shot: (x) => `f${x}`, setup: (x) => { t = x; }, hook: (s) => {
+    // The frame loads a new document during the frame mapping, and the frame's owner gives no backendNodeId: no mapping.
+    if (s.method === "DOM.getFrameOwner") { frameReload(t); return {}; }
+    return undefined;
+  }, during: (x) => { kept = (x.stage as any).tabs.get(x.tab.id).holdFrame; x.clock.timer(500, () => frameReload(x.tab)); } });
+  assert.equal(r.stage.counts.hoverNaive, 1, "the hover had no path of the stage");
+  assert.equal(kept, null, "no frame record at the hold's call");
+  assert.ok(r.res.ok && pressOf(r), "the press goes");
+  assert.equal(r.res.ok && r.res.end, "limit", "the hold runs to its limit");
+  assert.equal(r.stage.counts.holdFrameLoads, undefined);
 });
 
 test("board ab-t30.35, m3: a dialog that opened during the hover (the pinned MCP answers the hover with its modal state and no error), or after the hover before the press: no press, and the answer names the dialog", async () => {
