@@ -34,8 +34,8 @@
 //   the requests of the next USE_RETRY_MS get the same error at once, with no new start.
 // - The stop by use (each second, with the watch): when Chrome runs and nothing used it for the grace time (`config`'s
 //   `idle_stop_minutes`, a whole number from 1 to 1440, default 10; `status` gives it), the service stops Chrome and
-//   Xvfb (the owner rule first; Xvfb stays while the blanket Chrome runs on it: board ab-4wh.8) and sends `stopped`
-//   with the reason `idle`. The profile stays on disk. It is no crash: the record says `wanted: false`, so the
+//   Xvfb (the owner rule first; Xvfb stays while the blanket Chrome runs or its start runs: board ab-4wh.8) and sends
+//   `stopped` with the reason `idle`. The profile stays on disk. It is no crash: the record says `wanted: false`, so the
 //   supervisor starts nothing and the fail-closed watch counts no Chrome. A request that comes during the stop waits
 //   for its end, then starts Chrome again. A newer Google Chrome that waits (`update` `pending`) moves at this stop:
 //   the next start runs it.
@@ -166,6 +166,8 @@ export const USE_WAIT_MS = 60_000;
 export const USE_RETRY_MS = 10_000;
 /** After a fail-closed stop, a use starts Chrome again at most once in this time (the watch's 60 s or more). */
 export const FAIL_HOLD_MS = 60_000;
+/** I2: it names no stop and no start (board ab-4wh.25). */
+export const FAIL_HOLD_TEXT = `The agent browser is not ready: it closed for safety less than ${FAIL_HOLD_MS / 1000} s ago, and it gets ready again at an agent's use after that time.`;
 const USE_POLL_MS = 100;
 /** The text of a request whose start at a use failed: the start's error text is the reason (I2: it names no command). */
 export const useFailed = (reason: string) => `The agent browser could not get ready: ${reason.replace(/[.\s]+$/, "")}.`;
@@ -642,10 +644,9 @@ export class UnitPart implements ServicePart {
    * a use reaches the stopped Chrome's connections (boards ab-b84.33, ab-b84.34 and ab-b84.36). The drop cannot hit a new
    * Chrome's link: the unit's stop holds its lock, and only microtasks run between its end and the drop.
    */
-  private async stopUnit(why: StopWhy): Promise<boolean> {
+  private async stopUnit(why: StopWhy, begins?: (xvfbStays: boolean) => void): Promise<boolean> {
     this.beforeStop(why);
-    // The stop by use keeps the unit's Xvfb while the blanket Chrome runs on it (board ab-4wh.8); every other stop ends it.
-    try { return await this.unit.stop({ keepXvfb: why === "idle" }); }
+    try { return await this.unit.stop({ keepXvfb: why === "idle", ...(begins ? { begins } : {}) }); }
     finally { this.linkDown(); }
   }
 
@@ -933,14 +934,15 @@ export class UnitPart implements ServicePart {
    * A use of the blanket scope on Linux (board ab-4wh.8; C12, the blanket profile): the unit's Xvfb (alone when the main
    * Chrome does not run) and the Chrome that the blanket Chrome runs (unit.ts, startForBlanket); the main Chrome does not
    * start, and its state, its record and its events stay as they are. The rules of a use stay: with the part closed, no
-   * config yet or `enabled: false`, and in the hold-off after a fail-closed stop, it starts nothing (null: the blanket
-   * Chrome's start then finds no Xvfb). A stop that comes during the start (the daemon's `stop`, also during the wait for
-   * an install, or `enabled: false`) is that stop, not a failed start (the review's C1): null, and the blanket part, which
-   * that stop reached too, starts nothing. The answer: null, or the text of a start that failed (`useFailed`).
+   * config yet or `enabled: false`, it starts nothing (null: the blanket Chrome's start then finds no Xvfb). A stop that
+   * comes during the start (the daemon's `stop`, also during the wait for an install, or `enabled: false`) is that stop,
+   * not a failed start (the review's C1): null, and the blanket part, which that stop reached too, starts nothing. The
+   * answer: null, FAIL_HOLD_TEXT in the hold-off after a fail-closed stop, or the text of a start that failed (`useFailed`).
    */
   async wakeForBlanket(): Promise<string | null> {
     const cfg = this.unit.config;
-    if (this.closed || !cfg || !cfg.enabled || this.failClosedHold()) return null;
+    if (this.closed || !cfg || !cfg.enabled) return null;
+    if (this.failClosedHold()) return FAIL_HOLD_TEXT;
     if (!(await this.o.owner.check("a start of Xvfb for the blanket Chrome"))) return useFailed(NOT_OWNER);
     const stops = this.unit.stopCount;
     try { await this.unit.startForBlanket(); return null; }
@@ -1017,12 +1019,11 @@ export class UnitPart implements ServicePart {
     if (!idle()) return; // a use came during the owner check
     const pending = this.mover.updateState() === "pending" ? this.updater.readyVersion() : null;
     const run = (async () => {
-      // The Mac runs no Xvfb (board ab-v16.94.35): its line names Chrome only; the Linux line stays as it was.
-      // Board ab-4wh.8: Xvfb stays while the blanket Chrome runs on it (the unit's stop decides again under its lock).
-      this.o.log(`unit: no agent used the agent browser for ${this.idleMinutes} min; stopping ${this.o.unit.mac ? "Chrome" : this.unit.xvfbShared() ? "Chrome; Xvfb stays for the blanket Chrome" : "Chrome and Xvfb"} (the profile stays)`);
       this.pendingStart = false;
+      // Board ab-v16.94.35: the Mac runs no Xvfb. Board ab-4wh.25: never decide Xvfb's fate outside the unit's lock.
+      const line = (xvfbStays: boolean) => this.o.log(`unit: no agent used the agent browser for ${this.idleMinutes} min; stopping ${this.o.unit.mac ? "Chrome" : xvfbStays ? "Chrome; Xvfb stays for the blanket Chrome" : "Chrome and Xvfb"} (the profile stays)`);
       // The link of the stopped Chrome goes down before the stop's report and its end (stopUnit; board ab-b84.33).
-      const ran = await this.stopUnit("idle");
+      const ran = await this.stopUnit("idle", line);
       if (ran) this.stopped("idle", null);
       if (ran && pending) this.o.log(`update: the agent browser stopped with no use; its next start runs Google Chrome ${pending}`);
     })();

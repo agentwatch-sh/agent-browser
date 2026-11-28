@@ -316,7 +316,7 @@ try {
   const e5 = await req(d, "session_ended", DAEMON, { scope: "live-bl" });
   await until("the blanket folder goes at the scope's end", () => !existsSync(join(state, "blanket")) && blanketChromes().length === 0, 20_000);
   check("session_ended: the blanket Chrome is gone and the blanket folder is deleted", e5.ok === true);
-  // Board ab-4wh.8: Xvfb runs while either Chrome runs.
+  // Board ab-4wh.8: Xvfb runs while either Chrome runs or its start runs.
   const latest = JSON.parse(readFileSync(join(state, "unit.json"), "utf8"));
   if (latest.chrome_pid !== null && proc(latest.chrome_pid)) check("the main Chrome and Xvfb stay after the blanket Chrome's end", !!proc(latest.xvfb_pid));
   else {

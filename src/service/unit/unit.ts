@@ -17,9 +17,9 @@
 //   60 s; three failed starts in a row report once. On the Mac (board ab-xxh) a wanted Chrome that ended with no stop of
 //   the service is a stop by use: the supervisor does not start it again, and the next use does.
 // - The blanket Chrome (board ab-4wh.8; C12, the blanket profile) runs on the unit's Xvfb, which runs while either
-//   Chrome runs: a use of the blanket scope starts Xvfb alone (startForBlanket), the main Chrome's stop by use keeps it
-//   while the blanket Chrome runs, and releaseXvfb stops it when no Chrome runs on it. Its record says `wanted: false`
-//   then, so a new service stops it (adopt), after its sweep stopped the blanket Chrome.
+//   Chrome runs or its start runs: a use of the blanket scope starts Xvfb alone (startForBlanket), the main Chrome's stop
+//   by use keeps it while the blanket Chrome runs or its start runs, and releaseXvfb stops it when no Chrome runs on it.
+//   Its record says `wanted: false` then, so a new service stops it (adopt), after its sweep stopped the blanket Chrome.
 //
 // The Mac (board ab-v16.94.6; the design, section 10): with `mac` (mac-chrome.ts) the unit runs the operator's own Google
 // Chrome.app a second time on the agent profile, through `open -n -g`, and finds the new Chrome's main process on the
@@ -366,9 +366,6 @@ export class ChromeUnit {
    * crash of the wanted main Chrome keeps Xvfb, and the supervisor starts Chrome again on it (Linux with no blanket scope).
    */
   private xvfbBlanketAlone = false;
-
-  /** Board ab-4wh.8: the unit's Xvfb runs and another Chrome uses it (the stop by use keeps it; the part's log line). */
-  xvfbShared(): boolean { return this.aliveChild(this.xvfb) && this.xvfbUsed(); }
 
   /** Board ab-4wh.8: the unit's Xvfb runs with no Chrome on it, and no start or stop holds the lock (releaseXvfb would stop it). */
   idleXvfb(): boolean { return !this.lock.locked && this.xvfbUnused(); }
@@ -1087,22 +1084,24 @@ export class ChromeUnit {
 
   /**
    * Stop Chrome, then Xvfb, every leftover and every Chrome on the profile; record `wanted: false`. True when one ran.
-   * `keepXvfb` (board ab-4wh.8; the stop by use): Xvfb stays while another Chrome uses it (xvfbUser), and the blanket
-   * Chrome's next start runs the stopped Chrome's binary on it.
+   * `keepXvfb` (board ab-4wh.8; the stop by use): Xvfb stays when another Chrome uses it (xvfbUser) as the stop takes the
+   * lock, and the blanket Chrome's next start runs the stopped Chrome's binary on it. `begins` gets that choice there,
+   * before anything stops (board ab-4wh.25). A blanket start that comes later waits for the lock in startForBlanket.
    */
-  async stop(o: { keepXvfb?: boolean } = {}): Promise<boolean> {
+  async stop(o: { keepXvfb?: boolean; begins?: (xvfbStays: boolean) => void } = {}): Promise<boolean> {
     this.stops++;
     return this.lock.run(async () => {
+      const keep = o.keepXvfb === true && this.aliveChild(this.xvfb) && this.xvfbUsed();
+      try { o.begins?.(keep); } catch {}
       this.wantedFlag = false;
       this.resetStreak();
       const chrome = this.chrome, info = this.chromeInfo, bin = this.chromeBin;
       // No blanket launch while the stop runs (the review's I1): the plan comes back only when the stop keeps Xvfb.
       this.chrome = null; this.chromeInfo = null; this.blanketPlan = null;
       let stopped = await this.stopChild(chrome, this.chromeMarkers());
-      if (o.keepXvfb && this.aliveChild(this.xvfb) && this.xvfbUsed()) {
+      if (keep && this.aliveChild(this.xvfb)) {
         if (info && bin) this.blanketPlan = { binary: bin, kind: info.kind, version: info.version };
         this.xvfbBlanketAlone = true;
-        this.d.log(`unit: Xvfb :${this.display} stays: the blanket Chrome runs on it`);
       } else stopped = (await this.stopXvfb()) || stopped;
       stopped = (await this.stopLeftovers()) || stopped;
       stopped = (await this.stopOrphanChromes()) || stopped;
