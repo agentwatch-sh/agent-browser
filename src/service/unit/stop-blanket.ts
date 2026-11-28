@@ -53,7 +53,7 @@ export type ServiceRead = { kind: "none" } | { kind: "live"; pid: number } | { k
  * non-dumpable service is then hidden or unreadable; or subset=pid), when a read of a process fails for another reason
  * than its end, when the user or the arguments of a process that can be the service cannot be read, or when a service
  * names its state folder by a relative path. A process that ends during the reads is none: gone, a zombie, or in its
- * exit (board ab-4wh.26).
+ * exit with arguments that read empty (board ab-4wh.26; one in its exit whose arguments still read is a service).
  */
 export function serviceOn(state: string, procs: Procs, platform: NodeJS.Platform = process.platform): ServiceRead {
   let pids: number[];

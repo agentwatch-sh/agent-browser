@@ -411,6 +411,20 @@ test("stop --blanket and the exit flag (board ab-4wh.26): only a process whose a
   } finally { v.close(); }
 });
 
+test("board ab-4wh.29: a node process of this user whose arguments read empty and whose exe link cannot be read goes into its exit between the two end checks (at the exe read): it is none; with no exit it stops the command", () => {
+  const w = new World();
+  try {
+    const p = w.add({ argv: [NODE, BIN, "service", "--state-folder", w.paths.state] });
+    writeFileSync(join(w.proc, String(p.pid), "cmdline"), "");
+    rmSync(join(w.proc, String(p.pid), "exe"));
+    assert.deepEqual(serviceOn(w.paths.state, w.procs, "linux"), { kind: "unknown", why: `the arguments of pid ${p.pid} cannot be read` });
+    class ExitAtExe extends Procs {
+      override exe(pid: number) { if (pid === p.pid) w.exiting(pid, "exit"); return super.exe(pid); }
+    }
+    assert.deepEqual(serviceOn(w.paths.state, new ExitAtExe({ root: w.proc, uid: w.uid, self: w.self }), "linux"), { kind: "none" });
+  } finally { w.close(); }
+});
+
 test("stop --blanket refuses a state folder that is no state folder of the service (stop --all's rule): it signals no Chrome and deletes nothing, exit 3 with one line that names no path", async () => {
   const w = new World();
   try {
