@@ -110,6 +110,18 @@ test("over agent mode's endpoint, a recording that lands on a sign-in page names
   } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
 });
 
+test("over agent mode's endpoint, a recording whose tab lands on Chrome's error page says that the page has no host the agent browser could read (board ab-9au)", needsFfmpeg, async () => {
+  const fx = await fixtureServer(FIXTURE_HOST), chrome = await FakeChrome.start(site(fx.base)), h = await harness(), c = consumer([FIXTURE_HOST]);
+  const end = await backByChrome(h.fake, chrome);
+  try {
+    await h.ready(lineOf([FIXTURE_HOST]));
+    const e = await recordTake(chrome, c.options({ cdpUrl: h.url("my-repo") }), c.dir, fx.base, [{ wait: 20_000 }],
+      (page) => chrome.errorPageCommitted(page, "https://login.elsewhere.invalid/oauth?code=SECRET-CODE"));
+    assert.ok(e instanceof NotAllowedError, String(e));
+    assert.equal(e.message, "refusing: the tab went to a page whose host the agent browser could not read (a page with no host, or an error page of a failed load); the recording stopped and nothing was written");
+  } finally { end(); await h.close(); await chrome.close(); await fx.close(); c.remove(); }
+});
+
 // A second allowlisted site (review-50 F1): the hint names the site that the take was on last, not the first one.
 const SECOND = "docs.second.invalid";
 const secondSite = (base: string) => (url: URL) => url.hostname === SECOND ? { title: "second", text: "the second site" } : site(base)(url);

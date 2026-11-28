@@ -59,7 +59,13 @@ export function isAllowedUrl(url: string, allow: readonly string[]): boolean {
  * a name that DNS cannot resolve is that long). Board ab-81e, from the code of the pinned receiver.
  */
 export function guardCovers(host: string, allow: readonly string[]): boolean {
-  return covers(allow.filter((d) => d === ANY_HOST || normalizeEntry(d) === d), host);
+  return guardMatcher(allow)(host);
+}
+
+/** guardCovers with the list read once: the entries are filtered here, not at each host. */
+export function guardMatcher(allow: readonly string[]): (host: string) => boolean {
+  const entries = allow.filter((d) => d === ANY_HOST || normalizeEntry(d) === d);
+  return (host) => covers(entries, host);
 }
 
 export function assertAllowedUrl(url: string, allow: readonly string[]): void {

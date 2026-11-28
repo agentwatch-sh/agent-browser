@@ -20,6 +20,7 @@ const SUBFRAME = "ads.example";
 /** Where the tab stays: on the named host ("there"), on the guard's blank page, or on a page with no host it could read. */
 const BLANK = "on a blank page", NO_HOST_PAGE = "on a page whose host the agent browser could not read";
 const refusal = (to: string, where = BLANK) => `refusing: ${SITE} redirected the tab to ${to}, which is not on the allowlist. The tab stays open ${where}; agent-browser does not touch it`;
+const FAILED_LOAD = `refusing: the load of ${SITE} failed, and the tab is on an error page that the agent browser does not read. The tab stays open there; agent-browser does not touch it`;
 const UNVERIFIED = "refusing: about:blank has an unverified document origin; navigate to an allowlisted URL first";
 
 test("redirectError: a refusal whose tab URL names no host takes the blocked navigation's host", () => {
@@ -43,7 +44,7 @@ test("Chrome's error page names no host: never \"chromewebdata\" (board ab-81e)"
   assert.equal(page.message, `refusing: ${UNREAD_HOST} is not on the allowlist`);
   // A redirect refusal on it: the blocked host when the record has one, else the plain words; the tab is on a page with no host.
   assert.equal((redirectError(page, `https://${SITE}/get`, BLOCKED) as Error).message, refusal(BLOCKED, NO_HOST_PAGE));
-  assert.equal((redirectError(page, `https://${SITE}/get`) as Error).message, refusal(UNREAD_HOST, NO_HOST_PAGE));
+  assert.equal((redirectError(page, `https://${SITE}/get`) as Error).message, FAILED_LOAD);
 });
 
 const VECTORS = JSON.parse(readFileSync(new URL("./vectors/chrome-extension-83fd4c3/scopes.json", import.meta.url), "utf8"));
@@ -125,6 +126,8 @@ const PAGES: Record<string, PageSpec> = {
   }) },
   // Only a subframe goes off the list, then the tab goes to about:blank.
   "/frame-only": { title: "frame only", onload: (p) => p.later(0, () => { p.fake.subframeNavigates(p, "SUB-1", `https://${SUBFRAME}/frame`); guardBlanks(p); }) },
+  // A redirect off the list, then the tab shows a listed URL with no host: the refusal comes before any frame-tree read.
+  "/data": { title: "data", onload: (p) => p.later(0, () => { scriptGoesTo(p, `https://${BLOCKED}/page`); p.listedUrl = "data:text/html,x"; }) },
   "/ip": { title: "ip", onload: (p) => p.later(0, () => scriptGoesTo(p, "http://10.0.0.1:8080/page?code=SECRET-CODE")) },
   "/local": { title: "local", onload: (p) => p.later(0, () => scriptGoesTo(p, "http://localhost:3000/page?code=SECRET-CODE")) },
   // A redirect to a page on the list that fails: Chrome's error page commits with the failed URL in unreachableUrl, and
@@ -204,8 +207,17 @@ test("over agent mode's endpoint, a tab on Chrome's error page is on a page whos
   try {
     await commands.open(x.o, { url: `https://${SITE}/`, name: "t" });
     const e = await refused(commands.goto(x.o, { tab: "t", url: `https://${SITE}/broken` }));
-    assert.equal(e.message, refusal(UNREAD_HOST, NO_HOST_PAGE));
-    assert.doesNotMatch(e.message, /chromewebdata/);
+    assert.equal(e.message, FAILED_LOAD);
+    assert.doesNotMatch(e.message, /chromewebdata|not on the allowlist|redirected/);
+  } finally { await x.close(); }
+});
+
+test("over agent mode's endpoint, a refusal before the connection's first frame-tree read still names the blocked host (board ab-9au)", async () => {
+  const x = await endpoint();
+  try {
+    await commands.open(x.o, { url: `https://${SITE}/`, name: "t" });
+    const e = await refused(commands.goto(x.o, { tab: "t", url: `https://${SITE}/data` }));
+    assert.equal(e.message, refusal(BLOCKED, NO_HOST_PAGE));
   } finally { await x.close(); }
 });
 
