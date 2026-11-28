@@ -174,8 +174,11 @@ try {
   const rtcUdp = createSocket("udp4");
   let rtcPackets = 0, rtcConnections = 0;
   rtcUdp.on("message", () => { rtcPackets++; });
+  let rtcError = "";
+  rtcUdp.on("error", (e) => { rtcError = `the WebRTC UDP stand-in failed: ${e.message}`; log(rtcError); });
   await new Promise<void>((r) => rtcUdp.bind(0, "127.0.0.1", () => r()));
   const rtcTcp = createTcpServer((c) => { rtcConnections++; c.destroy(); });
+  rtcTcp.on("error", (e) => { rtcError = `the WebRTC TCP stand-in failed: ${e.message}`; log(rtcError); });
   await new Promise<void>((r) => rtcTcp.listen(0, "127.0.0.1", () => r()));
   const U = rtcUdp.address().port, T = (rtcTcp.address() as AddressInfo).port;
   closeStandIn = () => { wss.close(); standIn.closeAllConnections(); standIn.close(); try { rtcUdp.close(); } catch {} rtcTcp.close(); };
@@ -294,8 +297,8 @@ try {
     })()`);
     await sleep(500);
     log(`the page's WebRTC gathering: ${JSON.stringify(rtc)}; the UDP stand-in got ${rtcPackets} packet(s), the TCP stand-in ${rtcConnections} connection(s); the proxy refused ${refusedV4() - v4Before} more connection(s) to a loopback IPv4 address`);
-    check("WebRTC (--webrtc-ip-handling-policy=disable_non_proxied_udp): the page's RTCPeerConnection with a STUN and a TURN server on 127.0.0.1 gathers no UDP candidate, and the local UDP stand-in gets no packet", rtc?.state !== undefined && rtc.udp === 0 && rtcPackets === 0, `${JSON.stringify(rtc)}; ${rtcPackets} packet(s)`);
-    check("WebRTC's TCP to a TURN stand-in on 127.0.0.1 does not reach it (the log line above gives the proxy's refusals of it)", rtcConnections === 0, `${rtcConnections} connection(s)`);
+    check("WebRTC (--webrtc-ip-handling-policy=disable_non_proxied_udp): the page's RTCPeerConnection with a STUN and a TURN server on 127.0.0.1 gathers no UDP candidate, and the local UDP stand-in gets no packet", rtc?.state === "complete" && rtc.udp === 0 && rtcPackets === 0 && rtcError === "", `${JSON.stringify(rtc)}; ${rtcPackets} packet(s)${rtcError ? `; ${rtcError}` : ""}`);
+    check("WebRTC's TCP to a TURN stand-in on 127.0.0.1 does not reach it, and the proxy logs its refusal (a loopback IPv4 address; no line means Chrome made no attempt)", rtcConnections === 0 && refusedV4() - v4Before >= 1 && rtcError === "", `${rtcConnections} connection(s), ${refusedV4() - v4Before} refusal line(s)${rtcError ? `; ${rtcError}` : ""}`);
     await ev(`location.href = "http://private.test:${P}/top"; 1`).catch(() => null);
     await sleep(3_000);
     const after = await ev("document.title").catch((e: Error) => `(${e.message})`);

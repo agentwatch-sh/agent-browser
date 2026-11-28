@@ -28,7 +28,8 @@
 //   HANDSHAKE_MS (its bytes at most MAX_HANDSHAKE_BYTES), at most LOOKUPS_AT_ONCE lookups at a time (the box's resolver
 //   runs on libuv's small pool, which the service's own work shares) and at most WAITING_LOOKUPS waiting ones (a
 //   connection whose client ends, fails or closes leaves its lookup at once: board ab-4wh.14), a lookup's answer in
-//   LOOKUP_MS, the connect in CONNECT_MS, and the other side's end in HALF_CLOSE_MS after one side ended. After the reply the two sockets are piped (with their back pressure): no buffer grows.
+//   LOOKUP_MS, the connect in CONNECT_MS, and the other side's end in HALF_CLOSE_MS after one side ended.
+//   After the reply the two sockets are piped (with their back pressure): no buffer grows.
 // - A refusal answers the SOCKS reply 02 (not allowed by the rule set), so Chrome fails the request with
 //   net::ERR_SOCKS_CONNECTION_FAILED (a network error to the page), and the log gets one line with the kind of host and
 //   the reason: never a host, an address, a URL path or a query (at most LOG_LINES lines in LOG_WINDOW_MS, then one line
