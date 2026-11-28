@@ -313,8 +313,7 @@ agent-browser's own commands. The stage holds the same rule in memory:
   are a client's point, which keeps its fraction, and a step that starts at a client's point, which keeps
   that point's fraction (the step itself is whole px): a press and its release at the client's point, the
   notches at the page's last point when that point is the client's, the drag's short first step from a
-  press at the client's point, and the hold's press and its 1 px hand steps when the hold's hover sends no
-  path (C11). Where this design says that the stage presses at Playwright's point rounded to a whole px
+  press at the client's point, the release or dragCancel that the end of an action sends at the page's last point when that point is the client's, and the hold's press, its 1 px hand steps and its release at the hand's last point when the page's last point is the client's (the hover sends no path, or its path stops at the in-flight limit) (C11). Where this design says that the stage presses at Playwright's point rounded to a whole px
   (sections 5.1, 6.2 and 10.1), that holds on Linux only; on the Mac the press keeps the client's fraction.
 
 ### 4.7 When the stage passes a call unchanged
