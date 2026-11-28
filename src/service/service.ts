@@ -349,10 +349,10 @@ export class Stage1a implements Handler {
     if (this.ended.size > ENDED_MAX) this.ended.delete(this.ended.values().next().value!);
     if (theirs.length > 0) {
       this.log(`service: ${op}: the end of the scope ${scope} goes to no part: on the Mac its name and ${theirs.join(" and ")} differ only in case, so its folders are theirs`);
-      this.eachPart((p) => p.nameEnded?.(scope));
+      this.eachPart(op, (p) => p.nameEnded?.(scope));
       return;
     }
-    this.eachPart((p) => p.sessionEnded?.(scope));
+    this.eachPart(op, (p) => p.sessionEnded?.(scope));
   }
 
   /**
@@ -360,12 +360,24 @@ export class Stage1a implements Handler {
    * also the MCP part's port and its walk, reads a set_sessions or a session_ended on the same terms as the relay's gate
    * (handle's finally): the state's sessions changed before the parts ran. The first error comes again after the last part.
    */
-  private eachPart(hook: (p: ServicePart) => void): void {
+  private eachPart(op: string, hook: (p: ServicePart) => void): void {
+    const errors = this.firstError(op);
+    for (const p of this.parts) errors.run(() => hook(p));
+    errors.end();
+  }
+
+  private firstError(op: string): { run(step: () => void): void; end(): void } {
     let failed: { error: unknown } | null = null;
-    for (const p of this.parts) {
-      try { hook(p); } catch (error) { failed ??= { error }; }
-    }
-    if (failed) throw failed.error;
+    return {
+      run: (step) => {
+        try { step(); } catch (error) {
+          // The log rules (C12): an error's message can hold a value, so the line names only its kind (board ab-4wh.18).
+          if (failed) this.log(`service: ${op}: one more part failed after the first error (${(error as Error)?.name ?? typeof error})`);
+          else failed = { error };
+        }
+      },
+      end: () => { if (failed) throw failed.error; },
+    };
   }
 
   handle(req: Req): Answer | Promise<Answer> {
@@ -417,10 +429,10 @@ export class Stage1a implements Handler {
         // the parts get the snapshot: the file of ended scopes first, then end_scope, and the next object leaves it out.
         const now = new Set(this.remote.map((x) => x.scope));
         // An end or a part that throws stops no other part (the review of ab-4wh.13, m3): the first error comes at the end.
-        let failed: { error: unknown } | null = null;
-        for (const scope of before) if (!now.has(scope)) { try { this.endScope(scope, "set_sessions"); } catch (error) { failed ??= { error }; } }
-        try { this.eachPart((p) => p.setSessions?.(kept)); } catch (error) { failed ??= { error }; }
-        if (failed) throw failed.error;
+        const errors = this.firstError("set_sessions");
+        for (const scope of before) if (!now.has(scope)) errors.run(() => this.endScope(scope, "set_sessions"));
+        errors.run(() => this.eachPart("set_sessions", (p) => p.setSessions?.(kept)));
+        errors.end();
         return { data: {} };
       }
       case "session_ended":
