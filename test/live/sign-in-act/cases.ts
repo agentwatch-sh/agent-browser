@@ -91,7 +91,7 @@ self.addEventListener("fetch", (e) => {
   if (u.pathname !== "/login") return;
   e.waitUntil(fetch("/k1-sw-log?u=" + encodeURIComponent(u.pathname + u.search), { cache: "no-store" }).catch(() => {}));
   e.waitUntil(caches.open("aw-k1-log").then((c) => c.put("/k1-log/" + Date.now(), new Response(u.pathname))));
-  e.waitUntil(self.clients.matchAll({ includeUncontrolled: true }).then((cs) => cs.forEach((c) => c.postMessage("sw:" + u.pathname))));
+  e.waitUntil(self.clients.matchAll({ includeUncontrolled: true }).then((cs) => cs.forEach((c) => c.postMessage("sw:" + u.pathname + u.search))));
   e.respondWith(caches.open("aw-k1").then((c) => c.match("/k1-agent-page")).then((r) => r || fetch("/k1-agent-page")));
 });`;
 
