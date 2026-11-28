@@ -487,6 +487,39 @@ test("the peer check's wait (board ab-4wh.23): at most PEER_WAITING clients wait
   } finally { await r.close(); }
 });
 
+test("the peer check's wait on the Mac (board ab-4wh.27): with every wait place full, a client that the first read does not show is refused at once as a stranger: no byte, no lookup, no connect", async () => {
+  const r = await rig({ names: { "example.com": ["93.184.216.34"] }, tcp: () => () => [], extra: { system: "mac", limits: { peerMs: 5_000, peerWaiting: 2 } } });
+  try {
+    const held = await Promise.all([1, 2].map(() => opened(r, Buffer.alloc(0))));
+    assert.ok(await waitFor(() => r.proxy.counts().peer === 2), `two wait: ${r.proxy.counts().peer}`);
+    const t0 = Date.now();
+    const t = await talk(r, Buffer.concat([GREET, byName("example.com")]), { ms: 3_000 });
+    assert.ok(t.closed && t.got.length === 0, "closed with no byte");
+    assert.ok(Date.now() - t0 < 1_500, "at once, not at the end of the wait");
+    assert.deepEqual(r.logs.filter((l) => l.includes("a client")), [`blanket: the address proxy refused ${PEER_TEXT.mac}`]);
+    assert.deepEqual(r.lookups, [], "no lookup");
+    assert.deepEqual(r.dials, [], "no connect");
+    assert.equal(r.proxy.counts().peer, 2, "the two still wait");
+    for (const h of held) h.sock.destroy();
+  } finally { await r.close(); }
+});
+
+test("the peer check's wait on the Mac (board ab-4wh.27): a first read that fails waits, and with every place full the next client is still refused at once", async () => {
+  const r = await rig({ names: { "example.com": ["93.184.216.34"] }, tcp: () => () => null, extra: { system: "mac", limits: { peerMs: 5_000, peerWaiting: 2 } } });
+  try {
+    const held = await Promise.all([1, 2].map(() => opened(r, Buffer.alloc(0))));
+    assert.ok(await waitFor(() => r.proxy.counts().peer === 2), `two wait, none refused: ${r.proxy.counts().peer}`);
+    assert.deepEqual(r.logs.filter((l) => l.includes("a client")), []);
+    assert.ok(held.every((h) => !h.closed()));
+    const t0 = Date.now();
+    const t = await talk(r, Buffer.concat([GREET, byName("example.com")]), { ms: 3_000 });
+    assert.ok(t.closed && t.got.length === 0, "closed with no byte");
+    assert.ok(Date.now() - t0 < 1_500, "at once, not at the end of the wait");
+    assert.deepEqual(r.logs.filter((l) => l.includes("a client")), [`blanket: the address proxy refused ${PEER_TEXT.mac}`]);
+    for (const h of held) h.sock.destroy();
+  } finally { await r.close(); }
+});
+
 test("the peer check on Linux (board ab-4wh.23): a /proc/net/tcp that cannot be read, or a read that throws, refuses at once as a stranger, with no wait and no byte (on the Mac a failed read waits: above)", async () => {
   const fails: [string, () => () => readonly TcpLine[] | null][] = [["no table", () => () => null], ["a throw", () => () => { throw new Error("EACCES"); }]];
   for (const [what, tcp] of fails) {
