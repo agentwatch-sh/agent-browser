@@ -228,7 +228,7 @@ try {
   const item = st.sessions.find((s: any) => s.scope === "live-bl");
   check("status: the main Chrome's state is off and chrome_pid null while only Xvfb and the blanket Chrome run", st.state === "off" && st.chrome_pid === null, JSON.stringify({ state: st.state, chrome_pid: st.chrome_pid }));
   if (cdp === null) {
-    check("the pinned receiver has no feature blanket: the use gets the too-old 503", refusal.includes(TOO_OLD), refusal);
+    check("the receiver has no feature blanket: the use gets the too-old 503", refusal.includes(TOO_OLD), refusal);
     check("no \"*\" went: the service sent no set_scopes on the blanket link", !/blanket: link: .*set_scopes/.test(serviceErr) && !serviceErr.includes("blanket: the blanket Chrome of the session live-bl is ready"));
     await until("the blanket Chrome stops", () => blanketChromes().length === 0, 20_000);
     check("status: blanket true, blanket_state failed, list null, and the operator's sentence", item.blanket === true && item.blanket_state === "failed" && item.list === null && st.operator_text.includes("The blanket Chrome of the session live-bl could not start: the blanket profile's extension is too old for the blanket profile."), JSON.stringify(item));
