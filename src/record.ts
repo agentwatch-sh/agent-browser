@@ -27,7 +27,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { inflateSync } from "node:zlib";
 import { KEYS, keyFields, type Tab, type Viewport } from "./browser.ts";
 import { assertNavigationUrl, isAllowedUrl } from "./allowlist.ts";
-import { AgentBrowserError, NotAllowedError, UsageError, runCleanup, safeHost, signInHint, withCleanupErrors } from "./errors.ts";
+import { AgentBrowserError, NotAllowedError, UsageError, runCleanup, UNREAD_HOST, safeHost, signInHint, withCleanupErrors } from "./errors.ts";
 import { statePath } from "./options.ts";
 import { idx } from "./outline.ts";
 import { seededRandom } from "./human/random.ts";
@@ -1114,7 +1114,8 @@ async function runAndEncode(tab: Tab, plan: RecordPlan, framesDir: string, aroun
     if (sid !== tab.sessionId || p.frame?.parentId) return;
     if (isAllowedUrl(p.frame?.url ?? "", tab.browser.allow)) { driver.site = siteOf(p.frame?.url ?? ""); return; }
     const host = safeHost(p.frame?.url ?? "");
-    driver.fail(new NotAllowedError(p.frame?.url ?? "", `refusing: the tab navigated to ${host}, which is not on the allowlist${signInHint(host, driver.site)}; the recording stopped and nothing was written`));
+    const went = host === UNREAD_HOST ? "the tab went to a page whose host the agent browser could not read (a page with no host, or an error page of a failed load)" : `the tab navigated to ${host}, which is not on the allowlist${signInHint(host, driver.site)}`;
+    driver.fail(new NotAllowedError(p.frame?.url ?? "", `refusing: ${went}; the recording stopped and nothing was written`));
   });
   const offDetach = conn.on("Target.detachedFromTarget", (p: any) => {
     if (p.sessionId === tab.sessionId) driver.fail(new AgentBrowserError("error", "the tab was closed or detached during the recording; nothing was written"));

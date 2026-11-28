@@ -1503,8 +1503,9 @@ navigation leaves its list to `about:blank`, so the tab's URL then names no host
 the main frame's last navigation off the list instead, the host that the operator's prompt names, and says that
 the tab stays open on a blank page. It judges that host by the extension's rules: an entry that the extension
 refuses (`localhost`, an IP address) covers no host there. When the tab's URL is another URL with no host (a
-`data:` URL, or Chrome's error page `chrome-error://chromewebdata/` of a navigation that failed), the message says
-that the tab stays open on a page whose host the agent browser could not read. When no such host is known, it says
+`data:` URL), the message says that the tab stays open on a page whose host the agent browser could not read. When
+the load failed and the tab is on Chrome's error page (`chrome-error://chromewebdata/`), the message says that the load
+of the requested site failed and that the tab stays open on an error page. When no such host is known, it says
 `a host that the agent browser could not read`. No refusal names `(no host)` or `chromewebdata`. For a sign-in page
 (`accounts.google.com` and similar) it says to ask the operator to sign in to the requested site in their
 own Chrome and to send that site's sign-in to the agent browser with the operator extension (agentwatch —

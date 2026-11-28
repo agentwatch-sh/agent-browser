@@ -30,10 +30,13 @@ export class NotAllowedError extends AgentBrowserError {
   readonly host: string;
   /** The refused URL is about:blank: a redirect refusal says that the tab stays on a blank page (redirectError). */
   readonly blank: boolean;
+  /** Board ab-9au. */
+  readonly errorPage: boolean;
   constructor(url: string, message = `refusing: ${safeHost(url)} is not on the allowlist`) {
     super("not_allowed", message);
     this.host = safeHost(url);
     this.blank = /^about:blank([?#]|$)/.test(url);
+    this.errorPage = /^chrome-error:/i.test(url);
   }
 }
 
@@ -73,6 +76,7 @@ export function redirectError(e: unknown, requested: string, blocked?: string): 
   if (!(e instanceof NotAllowedError)) return e;
   const host = e.host === UNREAD_HOST ? blocked ?? UNREAD_HOST : e.host, site = safeHost(requested);
   if (host === site) return e;
+  if (e.errorPage && blocked === undefined) return new NotAllowedError("", `refusing: the load of ${site} failed, and the tab is on an error page that the agent browser does not read. The tab stays open there; agent-browser does not touch it`);
   const where = e.host !== UNREAD_HOST ? "there" : e.blank ? "on a blank page" : `on a page whose host the agent browser could not read`;
   return new NotAllowedError(host === UNREAD_HOST ? "" : `https://${host}/`, `refusing: ${site} redirected the tab to ${host}, which is not on the allowlist${signInHint(host, site)}. The tab stays open ${where}; agent-browser does not touch it`);
 }

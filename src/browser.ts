@@ -10,7 +10,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync, renameSync, statSync, rmSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { CDPConnection, CDPError } from "./cdp.ts";
-import { assertAllowedUrl, assertNavigationUrl, guardCovers, isAllowedUrl, loadAllowlist, validateAllowlist } from "./allowlist.ts";
+import { assertAllowedUrl, assertNavigationUrl, guardMatcher, isAllowedUrl, loadAllowlist, validateAllowlist } from "./allowlist.ts";
 import { AgentBrowserError, ChromeUnreachableError, DialogError, NotAllowedError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
 import { assertTestStateIsolated, recordDir, recordPath, resolveOptions, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
 import { withFileLock } from "./lock.ts";
@@ -774,12 +774,12 @@ export class Tab {
   private watchNavigations(): void {
     this.navigationsOff.clear();
     if (this.offNavigations) return;
-    const conn = this.browser.conn, allow = this.browser.allow;
+    const conn = this.browser.conn, guardCovers = guardMatcher(this.browser.allow);
     const seen = (frameId: unknown, url: unknown, committed: boolean) => {
       if (typeof frameId !== "string" || typeof url !== "string") return;
       const web = webUrlOf(url);
       if (web === undefined) return; // about:blank, data:, chrome-error: the extension's guard judges no host there either
-      if (!guardCovers(web.hostname, allow)) this.navigationsOff.set(frameId, web.hostname);
+      if (!guardCovers(web.hostname)) this.navigationsOff.set(frameId, web.hostname);
       else if (committed) this.navigationsOff.set(frameId, undefined);
     };
     const offs = [
@@ -797,8 +797,8 @@ export class Tab {
   }
 
   /**
-   * Limit: a refusal that comes before the connection's first frame-tree read (a listed URL off the list with no host,
-   * or the pinned window) has no main frame id yet, so it gets the plain words (board ab-81e).
+   * Limit: when Page.navigate itself is refused, the tab has no main frame id yet, so the refusal gets the plain words
+   * (boards ab-81e, ab-9au).
    */
   blockedHost(): string | undefined {
     return this.mainFrameId === undefined ? undefined : this.navigationsOff.get(this.mainFrameId);
@@ -1310,6 +1310,7 @@ export class Tab {
       }
       throw e;
     });
+    if (typeof res.frameId === "string") this.mainFrameId ??= res.frameId;
     if (res.errorText) { loaded.catch(() => {}); throw new Error(`navigation failed: ${res.errorText}`); }
     loaded.catch(() => {});
     await Promise.race([loaded, this.stopped]); // a dialog with no answer ends the wait at once
