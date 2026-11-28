@@ -273,7 +273,6 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   let ended = false;
   // The main model's agents' traffic (board ab-v16.94.11; board ab-4wh.24: the blanket model's is apart): see Relay.traffic.
   let agents = 0, busy = 0, lastMessage: number | null = null;
-  // The blanket model's agents' traffic (board ab-4wh.3; board ab-4wh.28: an MCP's own ticket connection is none).
   let blanketAgents = 0, blanketBusy = 0, blanketLast: number | null = null;
   const now = () => performance.now();
   /** The upgrades that wait for the service's start at a use: the relay's stop ends them. */

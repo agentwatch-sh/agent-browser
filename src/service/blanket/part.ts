@@ -84,10 +84,11 @@ export type BlanketPartOptions = {
   readyWaitMs?: number;
   /**
    * The stop by use of the blanket Chrome (C12), by the main Chrome's rule (board ab-v16.94.11): `ms()` is the unit's grace
-   * time (idle_stop_minutes); `use()` the blanket scope's use now, as C12's use (board ab-4wh.28): `inUse` while an
-   * agent's own connection is open, a message of one runs or an MCP tool call of the scope runs, and `quietFor`, the ms
-   * since the last of these (an MCP's own ticket connection is no use). After the grace time with no use, the Chrome
-   * stops; its folder stays. The check runs every `everyMs` (BLANKET_IDLE_CHECK_MS).
+   * time (idle_stop_minutes); `use()` the use now, as C12's use (board ab-4wh.28): `inUse` while an agent's connection
+   * of the blanket model (never an MCP's ticket connection) is open or one of its messages runs, or while an MCP tool call
+   * runs that started while its scope was the blanket scope (also after the switch goes off), and `quietFor`, the ms
+   * since the last of these. After the grace time with no use, the Chrome stops; its folder stays. The check runs every
+   * `everyMs` (BLANKET_IDLE_CHECK_MS).
    */
   idle?: { ms: () => number; use: () => { inUse: boolean; quietFor: number }; everyMs?: number };
   /** End the scope's MCP sessions (mcp/part.ts): at the blanket scope's end, as C12 says. */
@@ -152,7 +153,6 @@ export class BlanketPart implements ServicePart {
   private confirmedBody: Record<string, unknown> | null = null;
   /** The refused count of the blanket link's last answer to set_scopes (0: none). */
   private refusedBy = 0;
-  /** The last use of the blanket scope (a wake, or a use at a check). */
   private lastUse = 0;
   /** Since when the blanket link is down while the blanket Chrome runs (the watch), or null. */
   private linkDownAt: number | null = null;
@@ -170,10 +170,7 @@ export class BlanketPart implements ServicePart {
     if (o.idle) { this.idleTimer = setInterval(() => this.idleCheck(), o.idle.everyMs ?? BLANKET_IDLE_CHECK_MS); this.idleTimer.unref?.(); }
   }
 
-  /**
-   * The stop by use (C12): the blanket Chrome runs, no start runs, no use of the scope runs, and the last use is the grace
-   * time ago: the Chrome stops, and its folder stays for the session's next use.
-   */
+  /** The stop by use (C12, the blanket profile's stop). */
   idleCheck(): void {
     const idle = this.o.idle;
     if (!idle || this.stopped || this.starting || !this.o.chrome.running()) return;

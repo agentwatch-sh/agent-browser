@@ -26,7 +26,7 @@
 //   `quietFor` gives the time since the last of these messages, sends and tool calls, so a use between two checks counts
 //   too. The MCP's own CDP connection, an open MCP session, the model's own bridge calls and a tab's events are no use.
 //   The blanket scope's connections, messages and tool calls are no use of this Chrome (board ab-4wh.24); the blanket
-//   Chrome's own stop by use reads its own model's traffic (blanket/part.ts).
+//   Chrome has its own stop by use (blanket/part.ts; board ab-4wh.28).
 // - The start at a use (`wake`): a request that needs the browser while Chrome does not run starts Chrome and Xvfb (one
 //   start for all the requests that wait), waits until its caller's check says ready, at most USE_WAIT_MS, then goes on.
 //   The state is `starting` from its first moment, and the start sends `ready` with Chrome's pid. A start that fails

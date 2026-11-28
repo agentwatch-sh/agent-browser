@@ -1022,8 +1022,10 @@ test("ab-4wh.24: the blanket scope's MCP tool call that runs keeps no unused mai
   as(ROOT_BL);
   await cancel("bl", blSid, 5);
   await until(() => x.mcp!.activity("blanket").calls === 0, "bl's tool call ends");
-  for (const r of [await blCall, await webCall]) assert.match(r.text, /-32800/, "each call gets the cancelled answer");
   (x.part as any).idleMinutes = 0.02;
+  x.blanket!.part.idleCheck();
+  assert.ok(!blanketIdle() && x.w.alive(blanket.pid), "the grace time counts from the call's end");
+  for (const r of [await blCall, await webCall]) assert.match(r.text, /-32800/, "each call gets the cancelled answer");
   await until(() => { x.blanket!.part.idleCheck(); return !x.onProfile(x.blanketProfile); }, "the blanket Chrome's stop by use after bl's call", 20_000);
   (x.part as any).idleMinutes = 10;
   assert.ok(blanketIdle(), "the stop by use's log line");
