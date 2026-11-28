@@ -1,11 +1,12 @@
-// The vector of the Browser pane's seal of a payment's approval (contract C12, "The card payments": the pane's seal of an
-// approval, and the part's vectors; board ab-sta.18): test/vectors/pay-seal.json. Its two seals are the bytes that
+// The vector of the Browser pane's seal of a payment's approval (contract C12, "The card payments": the pane's seal of
+// an approval, and the part's vectors; board ab-sta.18): test/vectors/pay-seal.json. Its two seals are the bytes that
 // agentwatch's Browser pane made (agentwatch's agentwatch/tests/fixtures/card_pay_answer_seal.json at agentwatch commit
-// 3c97e860f), so this test and agentwatch's test open the same seals, and a change of the seal's format on either side
-// fails a test. Here the service's own code must give each seal's binding bytes (seal.ts bindingInfo), open each seal
-// with them to its payload (seal.ts openPaneSeal; the store's paySeal; PayRequests' pay_approve, the path of the service),
-// and refuse each case of `refused`. A mutation in memory of the binding (another label, another field order) makes the
-// same checks fail.
+// 3c97e860f), so this test and agentwatch's test open the same seals. No test here reads agentwatch's fixture: a change
+// there that also changes agentwatch's own tests fails no test here until agentwatch's test reads this vector from its
+// pinned agent-browser (board ab-sta.20). Here the service's own code must give each seal's binding bytes (seal.ts
+// bindingInfo), open each seal with them to its payload (seal.ts openPaneSeal; the store's paySeal; PayRequests'
+// pay_approve, the path of the service), and refuse each case of `refused`. A mutation in memory of the binding
+// (another label, another field order) makes the same checks fail.
 //
 // TEST keys and values only: the vectors' test pane key, the fixture's fixed test keys, and no value of a card.
 
@@ -33,6 +34,8 @@ const REFUSED: Record<string, any> = Object.fromEntries(V.refused.map((r: any) =
 const FIRST = control.cardPay.events.map((x: any) => x.ev).find((e: any) => e.ev === "pay_request");
 const bytes = (text: string) => Buffer.from(text, "utf8");
 const opens = (s: { sealed: string; sender_public_b64: string }, info: Buffer) => openPaneSeal(s.sealed, s.sender_public_b64, info, PANE);
+/** Node's error of the AEAD at a wrong key: the binding is part of the key schedule (board ab-isz). */
+const NO_OPEN = { message: "Unsupported state or unable to authenticate data" };
 
 test("the vector: TEST keys only, the vectors' first pay_request and its page-order hash, and the two seals of agentwatch's fixture byte for byte", () => {
   assert.ok(V.note.startsWith("TEST keys and values only, never a real key or secret, and no value of a card."), "named a test value");
@@ -90,7 +93,7 @@ test("a change of the seal's format fails the checks (a mutation in memory of th
   const unsorted = (purpose: string, fields: Record<string, string>) => bytes(`agentwatch-${purpose}-v1\u0000{${Object.keys(fields).map((n) => `${JSON.stringify(n)}:${JSON.stringify(fields[n])}`).join(",")}}`);
   // The same checks as the test above, with the mutated builder in place of the service's bindingInfo: each seal fails.
   for (const build of [relabel, unsorted]) assert.deepEqual(sealFailures(build), ["approve: other binding bytes", "refuse: other binding bytes"], build.name);
-  for (const s of V.seals) for (const build of [relabel, unsorted]) assert.throws(() => opens(s, build(s.purpose, s.fields)), `${s.payload.answer}, ${build.name}: does not open`);
+  for (const s of V.seals) for (const build of [relabel, unsorted]) assert.throws(() => opens(s, build(s.purpose, s.fields)), NO_OPEN, `${s.payload.answer}, ${build.name}: does not open`);
   // The vector's refused cases hold these mutated bytes of the approve seal, so agentwatch's side checks them too.
   assert.equal(REFUSED["another label"].binding, relabel(APPROVE.purpose, APPROVE.fields).toString("utf8"));
   assert.equal(REFUSED["another field order"].binding, unsorted(APPROVE.purpose, APPROVE.fields).toString("utf8"));
@@ -100,7 +103,7 @@ test("each refused case does not open with its binding; the seal of another purp
   for (const r of V.refused) {
     // A case with a purpose and fields: its binding is the service's binding of them.
     if (r.fields) assert.ok(bindingInfo(r.purpose, r.fields).equals(bytes(r.binding)), `${r.name}: the service's binding`);
-    assert.throws(() => opens(r, bytes(r.binding)), `${r.name}: does not open`);
+    assert.throws(() => opens(r, bytes(r.binding)), NO_OPEN, `${r.name}: does not open`);
   }
   // Another purpose: the approve seal's payload, fields and keys, sealed with the purpose browser-sign-in.
   const p = REFUSED["another purpose"];
