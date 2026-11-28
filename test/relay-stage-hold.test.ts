@@ -693,9 +693,11 @@ test("board ab-253: the hover's DOM.describeNode answers with the node while the
       if (reload) frameReload(t);
       return Promise.resolve({ node: { nodeId: 0, backendNodeId: 900, nodeType: 1, nodeName: "BUTTON" } });
     } });
+    assert.ok(r.tab.sent.some((s) => s.method === "DOM.getBoxModel" && s.child === "child" && s.params.backendNodeId === 900), "the hold read the box of the node that the hover's read gave");
     if (!reload) {
       assert.ok(r.res.ok && pressOf(r), "no new document: the press goes");
       assert.equal(r.res.ok && r.res.end, "limit");
+      assert.equal(r.stage.counts.holdFrameLoads, undefined);
       continue;
     }
     assert.deepEqual(r.res, { ok: false, why: HOLD_NOT.gone });
@@ -715,6 +717,7 @@ test("board ab-253: the end of the frame's session while its id is not known at 
     assert.ok(r.tab.sent.some((s) => s.method === "Target.getTargetInfo" && s.child === "child"), "the mapping read the frame's id");
     if (!detach) {
       assert.ok(r.res.ok && pressOf(r), "no end: the press goes");
+      assert.equal(r.stage.counts.holdFrameLoads, undefined);
       continue;
     }
     assert.deepEqual(r.res, { ok: false, why: HOLD_NOT.gone });
