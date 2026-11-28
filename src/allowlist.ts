@@ -51,17 +51,12 @@ export function isAllowedUrl(url: string, allow: readonly string[]): boolean {
 }
 
 /**
- * Whether the extension that guards the agent browser covers `host` (a URL's hostname) for a tab of this list: the
- * receiver's rule (chrome-extension agent/guard.js covered, agent/scopes.js listCovers), not isAllowedUrl's. The
- * receiver keeps only the entries that C5 writes as they are; validateAllowlist also takes "localhost", an IPv4
- * address (test/vectors/chrome-extension-83fd4c3/scopes.json refuses both) and a name of more than 253 characters.
- * So the entries here are the ones that the relay's port of C5 keeps (relay/scopes.ts normalizeEntry, checked on
- * those vectors), and covers() judges as the receiver does: an entry covers itself and each name under it, "*" the
- * public host class (host-class.ts). The record of a blocked navigation judges so (Tab.watchNavigations; board
- * ab-81e, from the code of the pinned receiver). Two gaps stay, both of a blanket list: its copy here is
- * {"allow":["*"]}, without the box's own names (C4's exclude), which the guard refuses; and the receiver's public
- * class has no length limit of a name or a label, which publicHost has (only a name that DNS cannot resolve is that
- * long).
+ * The receiver (chrome-extension agent/guard.js covered, agent/scopes.js listCovers) keeps only the entries that C5
+ * writes as they are; validateAllowlist also takes "localhost", an IPv4 address
+ * (test/vectors/chrome-extension-83fd4c3/scopes.json refuses both) and a name of more than 253 characters. Two gaps
+ * stay, both of a blanket list: its copy here is {"allow":["*"]}, without the box's own names (C4's exclude), which the
+ * guard refuses; and the receiver's public class has no length limit of a name or a label, which publicHost has (only
+ * a name that DNS cannot resolve is that long). Board ab-81e, from the code of the pinned receiver.
  */
 export function guardCovers(host: string, allow: readonly string[]): boolean {
   return covers(allow.filter((d) => d === ANY_HOST || normalizeEntry(d) === d), host);

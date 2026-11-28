@@ -752,28 +752,24 @@ export class Tab {
   // ---- the host of a blocked navigation (board ab-nfn)
 
   /**
-   * By frame id: the host of the frame's last navigation off the guard's covered set since the tab's last goto, or
-   * undefined after a commit in it. The extension that guards the agent browser sends a tab whose main frame starts a
-   * navigation off its list to about:blank (chrome-extension agent/guard.js, layers 2 and 3), so the tab's URL names no
-   * host after it; the operator's prompt names the host of that navigation's URL, and this record keeps the same host
-   * from Chrome's events. It judges a host with the guard's rule (guardCovers, board ab-81e), not with isAllowedUrl.
+   * The extension that guards the agent browser sends a tab whose main frame starts a navigation off its list to
+   * about:blank (chrome-extension agent/guard.js, layers 2 and 3), so the tab's URL names no host after it; the
+   * operator's prompt names the host of that navigation's URL.
    */
   private readonly navigationsOff = new Map<string, string | undefined>();
   private offNavigations: (() => void) | undefined;
 
   /**
-   * Record, from here on, the host of each navigation off the guard's covered set (Tab.blockedHost). Measured on the Linux
-   * server (Chromium 156, 2026-11-27): a script's location change gives Page.frameRequestedNavigation (currentTab) and
-   * Page.frameStartedNavigating with the new URL, before any commit; an HTTP redirect gives no event with the new URL
-   * before the commit (Page.frameNavigated); an error page commits as chrome-error://chromewebdata/ with the failed URL
-   * in unreachableUrl.
+   * Measured on the Linux server (Chromium 156, 2026-11-27): a script's location change gives
+   * Page.frameRequestedNavigation (currentTab) and Page.frameStartedNavigating with the new URL, before any commit; an
+   * HTTP redirect gives no event with the new URL before the commit (Page.frameNavigated); an error page commits as
+   * chrome-error://chromewebdata/ with the failed URL in unreachableUrl.
    *
-   * Each frame has an entry of its own, by its frame id, and blockedHost reads only the main frame's. From the code (not
-   * measured on Chrome; board ab-81e): a subframe of the page's process sends its events on this session with its own
-   * id; a cross-site subframe in a process of its own is a target of its own (type iframe), which agent-browser never
-   * attaches (no Target.setAutoAttach for frames; record.ts attaches workers only), so no event of it reaches this
-   * connection, and the events of every other session stop at the sid check. A navigation of the top frame that a
-   * subframe starts (target _top) is the main frame's: its events name the frame that navigates (the CDP docs).
+   * From the code, not measured on Chrome (board ab-81e): a subframe of the page's process sends its events on this
+   * session with its own id; a cross-site subframe in a process of its own is a target of its own (type iframe), which
+   * agent-browser never attaches (no Target.setAutoAttach for frames; record.ts attaches workers only), so no event of
+   * it reaches this connection. A navigation of the top frame that a subframe starts (target _top) is the main frame's:
+   * its events name the frame that navigates (the CDP docs).
    */
   private watchNavigations(): void {
     this.navigationsOff.clear();
@@ -801,15 +797,8 @@ export class Tab {
   }
 
   /**
-   * The host of the main frame's last navigation off the guard's covered set since the tab's last goto
-   * (Tab.watchNavigations), for a redirect refusal whose tab URL names no host (redirectError); undefined when none is
-   * known. It sends no CDP call: the main frame's id is the one that a frame-tree read cached (Tab.assertAllowed reads
-   * the frame tree once the tab's listed URL passed: also about:blank, the guard's page). A refusal that comes before
-   * that read in a new connection (a listed URL off the list with no host, or the pinned window) gets undefined: the
-   * plain words. Until board ab-81e the id of the main frame's last commit (a commit with no parentId) served such a
-   * refusal; its parentId filter kept a subframe's id out, but a commit of the main frame ends the old document's
-   * subframes and the new one (the guard's about:blank, a page with no host) has none, so no test of Chrome's order
-   * could see the filter, and that second source is gone.
+   * Limit: a refusal that comes before the connection's first frame-tree read (a listed URL off the list with no host,
+   * or the pinned window) has no main frame id yet, so it gets the plain words (board ab-81e).
    */
   blockedHost(): string | undefined {
     return this.mainFrameId === undefined ? undefined : this.navigationsOff.get(this.mainFrameId);

@@ -73,8 +73,6 @@ export function redirectError(e: unknown, requested: string, blocked?: string): 
   if (!(e instanceof NotAllowedError)) return e;
   const host = e.host === UNREAD_HOST ? blocked ?? UNREAD_HOST : e.host, site = safeHost(requested);
   if (host === site) return e;
-  // Where the tab is: on the named host, else (no host in the tab's URL) on a blank page or a page with no host (a
-  // data: URL, Chrome's error page).
   const where = e.host !== UNREAD_HOST ? "there" : e.blank ? "on a blank page" : `on a page whose host the agent browser could not read`;
   return new NotAllowedError(host === UNREAD_HOST ? "" : `https://${host}/`, `refusing: ${site} redirected the tab to ${host}, which is not on the allowlist${signInHint(host, site)}. The tab stays open ${where}; agent-browser does not touch it`);
 }

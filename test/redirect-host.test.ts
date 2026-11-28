@@ -63,7 +63,6 @@ test("the record judges a host as the extension's guard does (guardCovers), on t
     "https://bücher.example/", "https://www.xn--bcher-kva.example/", "https://other.example/"].map((u) => new URL(u).hostname);
   for (const h of hosts) assert.equal(guardCovers(h, allow), receiver(h), h);
   assert.ok(hosts.includes("10.0.0.1") && hosts.includes("xn--bcher-kva.example") && hosts.includes("a.example"));
-  // isAllowedUrl takes the two entries that the receiver refuses: the record's rule is not isAllowedUrl's.
   assert.ok(isAllowedUrl("http://10.0.0.1/", allow) && isAllowedUrl("http://app.localhost/", allow));
   // A blanket list ("*"): the public host class (its receiver cases: test/blanket-scope.test.ts). The box's own names (the
   // vectors' exclude) are not in the consumer's copy {"allow":["*"]}, so the record cannot see them: the gap that
@@ -126,8 +125,6 @@ const PAGES: Record<string, PageSpec> = {
   }) },
   // Only a subframe goes off the list, then the tab goes to about:blank.
   "/frame-only": { title: "frame only", onload: (p) => p.later(0, () => { p.fake.subframeNavigates(p, "SUB-1", `https://${SUBFRAME}/frame`); guardBlanks(p); }) },
-  // A redirect to hosts whose entries the receiver refuses (board ab-81e): the consumer's list holds them, the guard's
-  // covered set does not, so the guard sends the tab to about:blank.
   "/ip": { title: "ip", onload: (p) => p.later(0, () => scriptGoesTo(p, "http://10.0.0.1:8080/page?code=SECRET-CODE")) },
   "/local": { title: "local", onload: (p) => p.later(0, () => scriptGoesTo(p, "http://localhost:3000/page?code=SECRET-CODE")) },
   // A redirect to a page on the list that fails: Chrome's error page commits with the failed URL in unreachableUrl, and
