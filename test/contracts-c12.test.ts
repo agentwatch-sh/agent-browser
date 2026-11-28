@@ -1830,7 +1830,7 @@ const after9717 = (s: string) => {
   for (const e of V16_97_17_C12) if (t.includes(flat(e.old)) && !t.includes(flat(e.text))) t = t.replace(flat(e.old), flat(e.text));
   return t;
 };
-/** A text as the fix round of board ab-v16.97.15 changed it. */
+/** A text as the fix round of board ab-v16.97.15 and board ab-v16.97.17 changed it. */
 const after9715r1 = (s: string) => {
   let t = flat(s);
   for (const e of V16_97_15_R1) if (t.includes(flat(e.old)) && !t.includes(flat(e.text))) t = t.replace(flat(e.old), flat(e.text));

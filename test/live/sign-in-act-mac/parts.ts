@@ -1,6 +1,6 @@
 // The pure parts of the Mac live check of the stored sign-ins (harness.ts; board ab-v16.97.17; the design note
 // docs/superpowers/specs/2026-11-26-stored-sign-ins-mac-design.md, section 8, "The Mac live check"). No process, no file
-// and no network here: test/sign-in-act-mac.test.ts runs them on Linux in `npm test`.
+// and no network here.
 
 import { ACT_TEXT, passwordForms, signedInText } from "../../../src/service/signins/act-rules.ts";
 
@@ -43,11 +43,11 @@ export function testValues(random: (n: number) => Uint8Array): TestValues {
 
 export const valueForms = (v: TestValues): string[] => [...new Set([...passwordForms(v.user), ...passwordForms(v.pass)])];
 
+// The test values are ASCII, so each %XX decodes by itself; a stray "%" elsewhere in a log cannot stop the decode.
 export function holdsValue(text: string, v: TestValues): boolean {
   const forms = valueForms(v);
   if (forms.some((f) => text.includes(f))) return true;
-  let decoded: string;
-  try { decoded = decodeURIComponent(text.replace(/\+/g, " ")); } catch { return false; }
+  const decoded = text.replace(/\+/g, " ").replace(/%([0-9A-Fa-f]{2})/g, (_, h: string) => String.fromCharCode(parseInt(h, 16)));
   return decoded !== text && forms.some((f) => decoded.includes(f));
 }
 
@@ -180,7 +180,8 @@ export function parseRecord(text: string): PageRecord | null {
 
 // ------------------------------------------------------------------ the checks of step 3
 
-// `ok` null is "not measured", never a pass. `why` holds fixed words and numbers only: no value and no "/" (checkResult).
+// `ok` null is "not measured", never a pass. `why` holds fixed words and numbers only, never a value or a path:
+// checkResult refuses each "/", so no `why` names a URL path.
 export type Check = { ok: boolean | null; why: string | null };
 const pass: Check = { ok: true, why: null };
 const fail = (why: string): Check => ({ ok: false, why });
@@ -189,7 +190,7 @@ const notMeasured = (why: string): Check => ({ ok: null, why: `not measured: ${w
 export function answerCheck(output: string | null, exit: number | null, origin: string): Check {
   if (output === null || exit === null) return notMeasured("no answer file or exit file");
   if (exit === 0 && output.includes(signedInText(origin))) return pass;
-  const code = (Object.entries(ACT_TEXT) as [string, string][]).find(([, t]) => output.includes(t))?.[0];
+  const code = (Object.entries(ACT_TEXT) as [string, string][]).find(([, t]) => { const head = t.split("<")[0]; return head.length > 0 && output.includes(head); })?.[0];
   if (code) return fail(`a refusal: ${code}`);
   if (/\bNot signed in\b/.test(output)) return fail("a refusal of another text");
   return fail(exit === 0 ? "exit 0 with no success text of this origin" : `exit ${exit} with no known text`);
@@ -228,19 +229,27 @@ export function seatCheck(s: SiteState): Check {
   const signedAt = s.posts.find((p) => p.session)?.at;
   if (signedAt === undefined) return notMeasured("no sign-in at the site");
   const after = s.seats.filter((x) => x.at >= signedAt);
-  if (!after.length) return notMeasured(`the seat did not open ${SEAT_PATH} after the sign-in`);
-  return after.some((x) => x.signedIn) ? pass : fail(`the seat's tab of ${SEAT_PATH} did not load signed in`);
+  if (!after.length) return notMeasured("the seat did not open the seat page after the sign-in");
+  return after.some((x) => x.signedIn) ? pass : fail("the seat page did not load signed in");
 }
 
-export type ScanText = { kind: "answer" | "scan"; text: string | null; why?: string };
+export const SCAN_KINDS = ["the service log", "the sign-in log"] as const;
+export type ScanKind = (typeof SCAN_KINDS)[number];
+export type ScanText = { kind: "the answer" | ScanKind; text: string | null; why?: string };
 
-export function scanCheck(texts: ScanText[], v: TestValues): Check {
+// The service's act line names the credential and its origin (src/service/signins/act.ts, the end's log line), and
+// agentwatch's sign-in log keeps both for each act: a log text without either is not this run's (a wrong file, an empty
+// one, a rotated one).
+export function scanCheck(texts: ScanText[], v: TestValues, origin: string): Check {
   if (!holdsValue(`x${Buffer.from(v.pass).toString("base64url")}x`, v) || !holdsValue(`u=${encodeURIComponent(v.user)}`, v)) return fail("the scan's twin finds no planted value");
-  const holding = texts.map((t, i) => (t.text !== null && holdsValue(t.text, v) ? `${t.kind === "answer" ? "the answer" : `scan text ${i}`}` : null)).filter((x): x is string => x !== null);
+  const holding = texts.filter((t) => t.text !== null && holdsValue(t.text, v)).map((t) => t.kind);
   if (holding.length) return fail(`a test value is in ${holding.join(", ")}`);
-  const unread = texts.map((t, i) => (t.text === null ? `${t.kind === "answer" ? "the answer" : `scan text ${i}`} (${t.why ?? "not read"})` : null)).filter((x): x is string => x !== null);
-  if (unread.length) return notMeasured(`${unread.join(", ")}`);
-  if (texts.filter((t) => t.kind === "scan").length === 0) return notMeasured("no log or event text was given");
+  const missing = SCAN_KINDS.filter((k) => !texts.some((t) => t.kind === k));
+  if (missing.length) return notMeasured(`${missing.join(", ")}: not given`);
+  const unread = texts.filter((t) => t.text === null).map((t) => `${t.kind} (${t.why ?? "not read"})`);
+  if (unread.length) return notMeasured(unread.join(", "));
+  const foreign = texts.filter((t) => t.kind !== "the answer" && !t.text!.includes(CREDENTIAL_NAME) && !t.text!.includes(origin)).map((t) => t.kind);
+  if (foreign.length) return notMeasured(`${foreign.join(", ")} names neither the credential nor this run's origin`);
   return pass;
 }
 
@@ -271,7 +280,7 @@ export function resultOf(o: { os: string; port: number; values: TestValues; site
     page: pageCheck(last?.record ?? null, o.values),
     post: postCheck(o.site),
     seatTab: seatCheck(o.site),
-    scan: scanCheck([{ kind: "answer", text: o.answer, why: "no answer file" }, ...o.scans], o.values),
+    scan: scanCheck([{ kind: "the answer", text: o.answer, why: "no answer file" }, ...o.scans], o.values, originOf(o.port)),
     front: frontCheck(o.frontChanged),
   };
   return {
@@ -292,8 +301,8 @@ export function checkResult(r: Result, v: TestValues): string | null {
 // ------------------------------------------------------------------ the arguments and the operator's text
 
 export type Args =
-  | { cmd: "serve"; port: number; minutes: number }
-  | { cmd: "check"; folder: string; scans: string[]; window: Answer | null; frontChanged: Answer | null; keep: boolean }
+  | { cmd: "serve"; port: number; minutes: number; serviceLog: string; signInLog: string }
+  | { cmd: "check"; folder: string; window: Answer | null; frontChanged: Answer | null; keep: boolean }
   | { error: string };
 
 export function parseArgs(argv: readonly string[]): Args {
@@ -301,16 +310,15 @@ export function parseArgs(argv: readonly string[]): Args {
   if (cmd !== "serve" && cmd !== "check") return { error: "the first argument is serve or check" };
   const values = new Map<string, string[]>();
   let keep = false;
-  const single = cmd === "serve" ? ["--port", "--minutes"] : ["--folder", "--window", "--front-changed"];
-  const multi = cmd === "check" ? ["--scan"] : [];
+  const single = cmd === "serve" ? ["--port", "--minutes", "--service-log", "--sign-in-log"] : ["--folder", "--window", "--front-changed"];
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (cmd === "check" && a === "--keep") { keep = true; continue; }
-    if (!single.includes(a) && !multi.includes(a)) return { error: `an unknown argument for ${cmd}` };
+    if (!single.includes(a)) return { error: `an unknown argument for ${cmd}` };
     const val = rest[++i];
     if (val === undefined || val.startsWith("--")) return { error: `${a} needs a value` };
-    if (single.includes(a) && values.has(a)) return { error: `${a} comes more than once` };
-    values.set(a, [...(values.get(a) ?? []), val]);
+    if (values.has(a)) return { error: `${a} comes more than once` };
+    values.set(a, [val]);
   }
   const one = (k: string) => values.get(k)?.[0];
   if (cmd === "serve") {
@@ -318,14 +326,16 @@ export function parseArgs(argv: readonly string[]): Args {
     const minutes = one("--minutes") === undefined ? SERVE_MINUTES : Number(one("--minutes"));
     if (!Number.isInteger(port) || port < 0 || port > 65535) return { error: "--port is a whole number from 0 to 65535" };
     if (!Number.isInteger(minutes) || minutes < 1 || minutes > SERVE_MINUTES_MAX) return { error: `--minutes is a whole number from 1 to ${SERVE_MINUTES_MAX}` };
-    return { cmd, port, minutes };
+    const serviceLog = one("--service-log"), signInLog = one("--sign-in-log");
+    if (!serviceLog || !signInLog) return { error: "serve needs --service-log and --sign-in-log" };
+    return { cmd, port, minutes, serviceLog, signInLog };
   }
   const folder = one("--folder");
   if (!folder) return { error: "check needs --folder" };
   const answer = (k: string): Answer | null | "bad" => { const x = one(k); return x === undefined ? null : (ANSWERS as readonly string[]).includes(x) ? (x as Answer) : "bad"; };
   const window = answer("--window"), frontChanged = answer("--front-changed");
   if (window === "bad" || frontChanged === "bad") return { error: "--window and --front-changed take yes, no or unsure" };
-  return { cmd, folder, scans: values.get("--scan") ?? [], window, frontChanged, keep };
+  return { cmd, folder, window, frontChanged, keep };
 }
 
 export function setupText(o: { port: number; folder: string; values: TestValues; until: string; harness: string }): string {
@@ -345,7 +355,7 @@ export function setupText(o: { port: number; folder: string; values: TestValues;
     "The seat (step 3), from this checkout, after the operator's step 2:",
     `  agentwatch browser sign-in ${CREDENTIAL_NAME} > ${o.folder}/${ANSWER_FILE} 2>&1; echo $? > ${o.folder}/${EXIT_FILE}`,
     `  then open ${origin}${SEAT_PATH} in the seat's agent browser tab, ask the operator the two questions, and run`,
-    `  node ${o.harness} check --folder ${o.folder} --window <yes|no|unsure> --front-changed <yes|no|unsure> --scan <file> ...`,
+    `  node ${o.harness} check --folder ${o.folder} --window <yes|no|unsure> --front-changed <yes|no|unsure>`,
     "",
   ].join("\n");
 }

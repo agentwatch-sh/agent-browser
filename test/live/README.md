@@ -806,7 +806,8 @@ on. `test/live/sign-in-act/` cannot run on the Mac: it needs Xvfb, a test displa
 The harness serves a local login site and records what the site sees. It never starts a Chrome, never runs
 `agentwatch`, and opens no site: the seat runs the act and opens the seat page itself. The site is
 `http://login.localhost:48731` (`--port` gives another port), and its server listens on 127.0.0.1 only. It answers
-only the Host `login.localhost:<port>`; every other Host gets 421. Its pages:
+the site only for the Host `login.localhost:<port>`, and the check's stop only for a `POST /harness/stop` with the Host
+`127.0.0.1:<port>` (204 with the run's token, 403 without it); every other Host gets 421. Its pages:
 
 - `/login`: one form that posts to `/login` (its own origin), with a text field `u` (`autocomplete="username"`), one
   password field `p`, a hidden field `rec` and a submit button. The page script records, from the first key to the
@@ -821,16 +822,21 @@ only the Host `login.localhost:<port>`; every other Host gets 421. Its pages:
 The test username and password are made up and new for each run (`test-user-` and 12 hex digits, `test-pass-` and 16
 letters and digits: no Shift key, so the act types each character as one key). The run's folder (0700, in the
 system's temp folder) holds them in `run.json` (0600) for `check`, and `site.json` holds what the site saw (flags and
-counts only). The folder goes when the check stops the server, at the time limit (30 minutes, `--minutes` up to 120),
-and at SIGTERM, SIGINT or SIGHUP.
+counts only). `run.json` also keeps the two log files that `serve` gets, and the service log's size and inode at the
+start. The folder goes when the check stops the server, at the time limit (30 minutes, `--minutes` up to 120), and at
+SIGTERM, SIGINT or SIGHUP.
 
 The run, in order:
 
-1. The seat starts the server in the background (it prints one JSON line with `folder`, `port`, `origin`, `pid` and
-   `until`, then the operator's text with the run's test values):
+1. The seat starts the server in the background. It names the two texts of the act for the secret scan: the service's
+   log (the Mac's launchd job writes it to `~/.cache/agentwatch/agent-browser.log`) and agentwatch's sign-in log
+   (`agentwatch-sign-in-log.json` in agentwatch's browser state folder, the fields of the `sign_in` events). These two
+   places come from agentwatch's code; the manager confirms them for the pin. The server prints one JSON line with
+   `folder`, `port`, `origin`, `pid` and `until`, then the operator's text with the run's test values:
 
    ```sh
-   node test/live/sign-in-act-mac/harness.ts serve
+   node test/live/sign-in-act-mac/harness.ts serve --service-log ~/.cache/agentwatch/agent-browser.log \
+     --sign-in-log <agentwatch's browser state folder>/agentwatch-sign-in-log.json
    ```
 
 2. The operator, in the Browser pane: adds the scope's list entry `login.localhost`, and adds one stored sign-in with
@@ -844,15 +850,10 @@ The run, in order:
 
    Then the seat opens `http://login.localhost:48731/seat` in its own agent browser tab, and asks the operator two
    questions: "Did a window show on the screen during the sign-in?" and "Did the front app change?". The seat gives
-   each answer as `yes`, `no` or `unsure`, from the operator's words, and runs the check. Each `--scan` names one text
-   of the act for the secret scan: the service's log (the Mac's launchd job writes it to
-   `~/.cache/agentwatch/agent-browser.log`) and agentwatch's sign-in log (`agentwatch-sign-in-log.json` in agentwatch's
-   browser state folder, the fields of the `sign_in` events). These two places come from agentwatch's code; the
-   manager confirms them for the pin. Never scan the server's own output: it prints the test values for the operator.
+   each answer as `yes`, `no` or `unsure`, from the operator's words, and runs the check:
 
    ```sh
-   node test/live/sign-in-act-mac/harness.ts check --folder <folder> --window <yes|no|unsure> \
-     --front-changed <yes|no|unsure> --scan ~/.cache/agentwatch/agent-browser.log --scan <sign-in log>
+   node test/live/sign-in-act-mac/harness.ts check --folder <folder> --window <yes|no|unsure> --front-changed <yes|no|unsure>
    ```
 
    The check prints one JSON document and then stops the server (`--keep` leaves it running).
@@ -867,12 +868,16 @@ How to read the result:
   - `page`: the site's record of the act: the page was `visible` at the submit, no key came while it was hidden, every
     key, input and pointer event was trusted, at least as many keys came as the two values have characters, and from
     the first key to the submit (at least 500 ms) the page got at least 20 animation frames and 40 timer runs a second.
-    A fill by `Input.insertText` has no key, so the record has no `actMs` and the check is not measured.
+    When the act fills both fields by `Input.insertText`, no key comes, the record has no `actMs`, and the check is
+    not measured; when it fills one field so, the check fails with `<n> of <m> keys came`.
   - `post`: the last post holds both test values.
   - `seatTab`: a `/seat` after the sign-in loaded signed in (the move of C11).
-  - `scan`: no form of a test value (the act's five forms, also after a percent-decoding) is in the answer or in a
-    `--scan` text, and the scan's twin finds a planted value. A text that could not be read (or is larger than 64 MiB),
-    and a check with no `--scan`, is not measured.
+  - `scan`: no form of a test value (the act's five forms, also after a percent-decoding of each `%XX`) is in the
+    answer, in the service log or in the sign-in log, and the scan's twin finds a planted value. Of the service log the
+    check reads only the part after the server's start (the whole file when its inode changed or it got shorter: a
+    rotation); the sign-in log it reads whole (agentwatch writes it whole). Not measured: a log that could not be read,
+    more than 64 MiB to read, and a log that names neither `mac-live-test` nor this run's origin (a wrong file, an
+    empty one, or one of another run: the service's act line and agentwatch's sign-in log name both).
   - `front`: the operator's answer: `no` holds, `yes` fails.
 - `page`: the record's numbers: `vis`, `focus` and `submitTrusted` at the submit; `keys`, `keysUp`, `inputs`,
   `pointer`, `untrusted`; `keysVisible` and `keysHidden`, `keysFocus` and `keysNoFocus` (each key's state);
@@ -889,8 +894,9 @@ and the window's flash at its create. Only the operator's two answers speak to t
 
 `test/sign-in-act-mac.test.ts` (in `npm test`) tests the pure parts (`sign-in-act-mac/parts.ts`), runs the page script
 in a stand-in DOM (`node:vm`), and on Linux runs the harness on loopback: `serve`, a stand-in of the act's requests (the
-page, the post with the run's values and a record, `/home`, `/seat`, a wrong Host), `check` with a clean text and with
-a text that holds a test value, the check's stop, `--keep`, SIGTERM, and the folder's removal. It starts no Chrome.
+page, the post with the run's values and a record, `/home`, `/seat`, a wrong Host), `check` with clean logs, with no
+sign-in log, with only an older part of the service log, with a rotated service log and with a log that holds a test
+value, a damaged folder, the check's stop, `--keep`, SIGTERM, and the folder's removal. It starts no Chrome.
 
 ## The Mac blanket check
 

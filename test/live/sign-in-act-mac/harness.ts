@@ -2,19 +2,14 @@
 // docs/superpowers/specs/2026-11-26-stored-sign-ins-mac-design.md, section 8, "The Mac live check", steps 1 to 4;
 // test/live/README.md, "The Mac live check of the stored sign-ins").
 //
-//   node test/live/sign-in-act-mac/harness.ts serve [--port 48731] [--minutes 30]
-//   node test/live/sign-in-act-mac/harness.ts check --folder <folder> --window <a> --front-changed <a> [--scan <file>]... [--keep]
-//
-// It never starts a Chrome, never runs agentwatch, and opens no site: the seat runs `agentwatch browser sign-in` and
-// opens the seat page itself. The server listens on 127.0.0.1 only. The run's folder (0700, in the system's temp folder)
-// holds the made-up test values in run.json (0600) for `check`; the folder goes at the stop, the time limit, SIGTERM,
-// SIGINT and SIGHUP.
+//   node test/live/sign-in-act-mac/harness.ts serve --service-log <file> --sign-in-log <file> [--port 48731] [--minutes 30]
+//   node test/live/sign-in-act-mac/harness.ts check --folder <folder> --window <a> --front-changed <a> [--keep]
 
 import { randomBytes } from "node:crypto";
-import { chmodSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, mkdtempSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, request } from "node:http";
 import { constants, tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   ANSWER_FILE, EXIT_FILE, HARNESS, POST_MAX_BYTES, RUN_FILE, SCAN_MAX_BYTES, SITE_FILE, STOP_HEADER, STOP_PATH, VERSION,
@@ -54,13 +49,13 @@ if (args.cmd === "serve") {
       const a = siteAnswer({ method: req.method ?? "", path: req.url ?? "", host: req.headers.host, cookie: req.headers.cookie, body, token: req.headers[STOP_HEADER] as string | undefined },
         { port, token, values }, sessions, () => randomBytes(16).toString("hex"));
       const stop = a.event?.kind === "stop";
-      res.writeHead(a.status, a.headers).end(a.body, () => { if (stop) end(0, "the check's stop"); });
-      if (!a.event) return;
-      const line = eventLine(a.event);
+      if (a.event && !stop) {
+        site = applyEvent(site, a.event, Date.now());
+        writeJson(join(folder, SITE_FILE), site);
+      }
+      const line = a.event ? eventLine(a.event) : null;
       if (line) process.stdout.write(`${line}\n`);
-      if (stop) return;
-      site = applyEvent(site, a.event, Date.now());
-      writeJson(join(folder, SITE_FILE), site);
+      res.writeHead(a.status, a.headers).end(a.body, () => { if (stop) end(0, "the check's stop"); });
     });
   });
   const end = (code: number, why: string) => {
@@ -76,41 +71,55 @@ if (args.cmd === "serve") {
   for (const s of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(s, () => end(128 + constants.signals[s], s));
   process.on("uncaughtException", (e) => { process.stderr.write(`${HARNESS}: ${(e as Error).message}\n`); end(1, "an error"); });
   let port = args.port;
+  const stat = (f: string) => { try { const st = statSync(f, { bigint: true }); return { ino: String(st.ino), size: Number(st.size) }; } catch { return { ino: null, size: 0 }; } };
+  // The service log only grows between rotations; agentwatch writes its sign-in log whole, a new file at each write
+  // (statefiles.write_json).
+  const serviceLog = { path: resolve(args.serviceLog), ...stat(resolve(args.serviceLog)) };
+  const signInLog = { path: resolve(args.signInLog) };
   server.once("error", (e) => { process.stderr.write(`${HARNESS}: the server cannot listen on 127.0.0.1:${args.port} (${(e as NodeJS.ErrnoException).code ?? e.message})\n`); end(1, "no server"); });
   server.listen(args.port, "127.0.0.1", () => {
     port = (server.address() as { port: number }).port;
-    writeJson(join(folder, RUN_FILE), { v: VERSION, pid: process.pid, port, token, user: values.user, pass: values.pass });
+    writeJson(join(folder, RUN_FILE), { v: VERSION, pid: process.pid, port, token, user: values.user, pass: values.pass, serviceLog, signInLog });
     writeJson(join(folder, SITE_FILE), site);
     const until = new Date(Date.now() + args.minutes * 60_000).toISOString().slice(0, 19) + "Z";
     limit = setTimeout(() => end(1, `the time limit of ${args.minutes} minutes`), args.minutes * 60_000);
     const harness = relative(process.cwd(), fileURLToPath(import.meta.url)) || fileURLToPath(import.meta.url);
-    process.stdout.write(`${JSON.stringify({ harness: HARNESS, version: VERSION, folder, port, origin: originOf(port), pid: process.pid, until })}\n`);
-    process.stdout.write(setupText({ port, folder, values, until, harness }));
+    process.stdout.write(`${JSON.stringify({ harness: HARNESS, version: VERSION, folder, port, origin: originOf(port), pid: process.pid, until })}\n${setupText({ port, folder, values, until, harness })}`);
   });
 } else {
   const { folder } = args;
-  let run: { port: number; token: string; user: string; pass: string };
+  let run: { port: number; token: string; user: string; pass: string; serviceLog: { path: string; ino: string | null; size: number }; signInLog: { path: string } };
   let site: SiteState;
   try {
     run = JSON.parse(readFileSync(join(folder, RUN_FILE), "utf8"));
     site = JSON.parse(readFileSync(join(folder, SITE_FILE), "utf8"));
-    if (!Number.isInteger(run.port) || typeof run.user !== "string" || typeof run.pass !== "string" || !Array.isArray(site.posts)) throw new Error("its form");
-  } catch (e) {
-    process.stderr.write(`${HARNESS}: the folder holds no run of the harness (${(e as Error).message.split("\n")[0]})\n`);
+    if (!Number.isInteger(run.port) || typeof run.user !== "string" || typeof run.pass !== "string" || typeof run.serviceLog?.path !== "string" || !Number.isInteger(run.serviceLog.size)
+      || typeof run.signInLog?.path !== "string" || !Array.isArray(site.posts)) throw new Error("its form");
+  } catch {
+    // JSON.parse's message can quote run.json, and run.json holds the test values.
+    process.stderr.write(`${HARNESS}: the folder holds no run of the harness\n`);
     process.exit(2);
   }
   const values: TestValues = { user: run.user, pass: run.pass };
-  const read = (file: string): { text: string | null; why?: string } => {
+  const read = (file: string, after?: { ino: string | null; size: number }): { text: string | null; why?: string } => {
     try {
-      const size = statSync(file).size;
-      if (size > SCAN_MAX_BYTES) return { text: null, why: `larger than ${SCAN_MAX_BYTES >> 20} MiB` };
-      return { text: readFileSync(file, "latin1") };
+      const st = statSync(file, { bigint: true });
+      const size = Number(st.size);
+      const from = after && after.ino === String(st.ino) && size >= after.size ? after.size : 0;
+      if (size - from > SCAN_MAX_BYTES) return { text: null, why: `more than ${SCAN_MAX_BYTES >> 20} MiB to read` };
+      const buf = Buffer.alloc(size - from);
+      const fd = openSync(file, "r");
+      let got = 0;
+      try {
+        for (let n = 1; got < buf.length && n > 0; got += n) n = readSync(fd, buf, got, buf.length - got, from + got);
+      } finally { closeSync(fd); }
+      return { text: buf.subarray(0, got).toString("latin1") };
     } catch (e) { return { text: null, why: (e as NodeJS.ErrnoException).code ?? "not read" }; }
   };
   const answer = read(join(folder, ANSWER_FILE)).text;
   const exitText = read(join(folder, EXIT_FILE)).text?.trim() ?? "";
   const exit = /^[0-9]{1,3}$/.test(exitText) ? Number(exitText) : null;
-  const scans: ScanText[] = args.scans.map((f) => ({ kind: "scan", ...read(f) }));
+  const scans: ScanText[] = [{ kind: "the service log", ...read(run.serviceLog.path, run.serviceLog) }, { kind: "the sign-in log", ...read(run.signInLog.path) }];
   const result = resultOf({ os: process.platform, port: run.port, values, site, answer, exit, scans, window: args.window, frontChanged: args.frontChanged });
   const bad = checkResult(result, values);
   process.stdout.write(bad ? `${JSON.stringify({ harness: HARNESS, version: VERSION, ok: false, failed: bad })}\n` : `${JSON.stringify(result, null, 2)}\n`);

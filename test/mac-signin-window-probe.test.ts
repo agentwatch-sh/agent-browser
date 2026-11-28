@@ -229,13 +229,13 @@ test("the taskport right: its fields (no comment, no date) and what they mean fo
   assert.equal(form("<key>class</key><string>user</string><key>authenticate-user</key><true/><key>shared</key><true/><key>timeout</key><integer>0</integer>"), "a password at each request");
   assert.equal(form("<key>class</key><string>user</string><key>shared</key><true/><key>timeout</key><integer>36000</integer>"), "another form", "no authenticate-user key (board ab-v16.97.17)");
   assert.equal(form("<key>class</key><string>evaluate-mechanisms</string>"), "another form");
-  assert.equal(form("<key>k</key><string>v</string>"), "unknown");
+  assert.equal(form("<key>k</key><string>v</string>"), "another form", "a parsed dict with no class (board ab-v16.97.17)");
   const other = parseTaskport(run(`<plist version="1.0"><dict><key>class</key><string>user</string><key>group</key><string>somebody</string><key>rule</key><array><string>my-rule</string></array></dict></plist>`));
   assert.deepEqual([other.right!.group, other.right!.rule], ["other", ["other"]], "no name but the known ones");
   assert.deepEqual(parseTaskport(run("", 1, { stderr: "NO (-60005)\n" })), { read: "exit", exit: 1, right: null, meaning: "no right" });
   assert.deepEqual(parseTaskport(run("YES (0)")), { read: "an unknown text", exit: 0, right: null, meaning: "unknown" });
   assert.deepEqual(parseTaskport(run("", null, { spawnError: "ENOENT" })), { read: "no tool", exit: null, right: null, meaning: "unknown" });
-  assert.equal(taskportMeaning({ class: null, rule: null, authenticateUser: null, shared: null, timeout: null }), "unknown");
+  assert.equal(taskportMeaning({ class: null, rule: null, authenticateUser: null, shared: null, timeout: null }), "another form");
 });
 
 // ------------------------------------------------------------------ the reads and the verdicts
