@@ -37,9 +37,9 @@ export class Procs {
 
   /**
    * True when `pid` is in its exit (board ab-4wh.26): the kernel's flags of the process, field 9 of /proc/<pid>/stat, hold
-   * PF_EXITING. The kernel sets it first in its exit, before the process's memory goes; from then on the process runs no
-   * code of its own, its cmdline reads empty and its exe link is gone (ENOENT), while its stat still says R until it is
-   * a zombie (measured on the Linux server, 2026-11-27). False when the stat cannot be read.
+   * PF_EXITING. The kernel sets it first in its exit; from then on the process runs no code of its own. Its memory goes
+   * after the flag, and then its cmdline reads empty and its exe link is gone (ENOENT), while its stat still says R until
+   * it is a zombie (measured on the Linux server, 2026-11-27). False when the stat cannot be read.
    */
   exiting(pid: number): boolean {
     let raw: string;
