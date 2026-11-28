@@ -876,8 +876,9 @@ How to read the result:
     answer, in the service log or in the sign-in log, and the scan's twin finds a planted value. Of the service log the
     check reads only the part after the server's start (the whole file when its inode changed or it got shorter: a
     rotation); the sign-in log it reads whole (agentwatch writes it whole). Not measured: a log that could not be read,
-    more than 64 MiB to read, and a log that names neither `mac-live-test` nor this run's origin (a wrong file, an
-    empty one, or one of another run: the service's act line and agentwatch's sign-in log name both).
+    more than 64 MiB to read, and a log that names neither `mac-live-test` nor this run's origin (a wrong file or an
+    empty one: the service's act line and agentwatch's sign-in log name both). The sign-in log is not tied to this
+    run: a sign-in log of an earlier run on the same port passes this control (board ab-v16.97.20).
   - `front`: the operator's answer: `no` holds, `yes` fails.
 - `page`: the record's numbers: `vis`, `focus` and `submitTrusted` at the submit; `keys`, `keysUp`, `inputs`,
   `pointer`, `untrusted`; `keysVisible` and `keysHidden`, `keysFocus` and `keysNoFocus` (each key's state);
