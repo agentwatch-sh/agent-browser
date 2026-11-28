@@ -879,10 +879,12 @@ How to read the result:
     sign-in log it reads whole (agentwatch writes it whole). Not measured: a log that could not be read, more than 64
     MiB to read, and a log that does not name this run's origin, as the printed `origin` followed by no digit (a wrong
     file, an empty one, or the log of an earlier run: the service's act line and agentwatch's sign-in log name the
-    origin). The port is free when `serve` starts, so a log of an earlier run names another origin unless the same
-    port came again or `--port` fixed it. Stated limit: after a rotation, the lines of this run that went into the
-    rotated file are not read. The percent-decoding is right for ASCII values only: a run's test value that is not
-    ASCII fails the scan, and `check` refuses a `run.json` that holds one (exit 2).
+    origin). The port is free when `serve` starts, so a log of an earlier run names another origin unless the same port
+    came again or `--port` fixed it. Stated limit: after a rotation, the lines of this run that went into the rotated
+    file are not read, and a copytruncate whose new first bytes equal the old ones (a log that starts with the same
+    line, shorter than 4096 bytes at the start) is read from the old size. The percent-decoding is right for ASCII
+    values only: a run's test value that is not ASCII fails the scan, and `check` refuses a `run.json` that holds one
+    (exit 2).
   - `front`: the operator's answer: `no` holds, `yes` fails.
 - `page`: the record's numbers: `vis`, `focus` and `submitTrusted` at the submit; `keys`, `keysUp`, `inputs`,
   `pointer`, `untrusted`; `keysVisible` and `keysHidden`, `keysFocus` and `keysNoFocus` (each key's state);

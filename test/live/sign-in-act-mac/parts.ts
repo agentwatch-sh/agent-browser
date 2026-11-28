@@ -45,6 +45,7 @@ export const valueForms = (v: TestValues): string[] => [...new Set([...passwordF
 
 export const isAscii = (s: string) => /^[\x00-\x7f]*$/.test(s);
 
+/** Each %XX decodes by itself: right for ASCII values only (scanCheck and check refuse others). */
 export function holdsValue(text: string, v: TestValues): boolean {
   const forms = valueForms(v);
   if (forms.some((f) => text.includes(f))) return true;
@@ -240,6 +241,7 @@ export const namesOrigin = (text: string, origin: string): boolean => {
 export type LogMark = { ino: string | null; size: number; headLen: number; head: string | null };
 export const HEAD_MAX = 4096;
 
+/** headLen is min(size, HEAD_MAX) at serve: an append keeps those bytes; a copytruncate can keep them too (README). */
 export function scanFrom(mark: LogMark, now: { ino: string; size: number; headOf: (len: number) => string | null }): number {
   if (mark.ino === null || mark.ino !== now.ino || now.size < mark.size) return 0;
   return mark.headLen === 0 || now.headOf(mark.headLen) === mark.head ? mark.size : 0;
@@ -249,6 +251,7 @@ export const SCAN_KINDS = ["the service log", "the sign-in log"] as const;
 export type ScanKind = (typeof SCAN_KINDS)[number];
 export type ScanText = { kind: "the answer" | ScanKind; text: string | null; why?: string };
 
+/** The origin's forms: act.ts's act line ("origin <o>,") and agentwatch's sign-in log (its acts' origin). */
 export function scanCheck(texts: ScanText[], v: TestValues, origin: string): Check {
   if (!isAscii(v.user + v.pass)) return fail("a test value is not ASCII");
   if (!holdsValue(`x${Buffer.from(v.pass).toString("base64url")}x`, v) || !holdsValue(`u=${encodeURIComponent(v.user)}`, v)) return fail("the scan's twin finds no planted value");

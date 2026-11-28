@@ -461,7 +461,6 @@ test("the harness on loopback: a test value in a log fails check (exit 1), a rot
     assert.deepEqual(JSON.parse(rotated.stdout).checks.scan, { ok: true, why: null }, "the rotated log is read whole");
     assert.ok(existsSync(s.head.folder), "--keep: serve still runs");
     const runText = readFileSync(join(s.head.folder, RUN_FILE), "utf8");
-    writeFileSync(join(s.head.folder, RUN_FILE), runText.slice(0, -3));
     writeFileSync(join(s.head.folder, RUN_FILE), JSON.stringify({ ...JSON.parse(runText), user: "test-user-caf\u00e9" }));
     const nonAscii = await check(env, ["--folder", s.head.folder]);
     assert.deepEqual([nonAscii.code, nonAscii.stdout], [2, ""], "a test value that is not ASCII: no run of the harness");
