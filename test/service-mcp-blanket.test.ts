@@ -122,3 +122,59 @@ test("ab-4wh.24: a tool call of the blanket scope is no use of the main Chrome: 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("ab-4wh.28: a tool call counts for the Chrome of its scope at its start: a blanket scope's call stays in activity(\"blanket\") after the switch goes off, and one that the session's end ends leaves no count; the scope's next call after the switch counts for the main Chrome", { timeout: 60_000 }, async () => {
+  const dir = tempDir("ab-mcp-blanket-switch-");
+  const on = new Set(["bl"]);
+  // The test worker (no Playwright, no browser): its browser_wait_for gets no answer, so the call runs until its cancel.
+  const t = new McpTransport({ list: LIST, stateFolder: join(dir, "state"), ticketUrl: () => null, log: () => {}, blanket: (scope) => on.has(scope), worker: { heapMb: 64, entry: new URL("./fixtures/mcp-answer-worker.ts", import.meta.url) } });
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    const scope = /^\/mcp\/([^/?]+)/.exec(req.url ?? "")?.[1] ?? "none";
+    void Promise.resolve((t.request as any)(req, res, scope, async () => true, "local")).catch(() => { if (!res.headersSent) res.writeHead(500, { "Content-Length": Buffer.byteLength(MCP_FAILED) }).end(MCP_FAILED); });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/mcp/`;
+  const until = async (ok: () => boolean, what: string) => { for (let i = 0; i < 500 && !ok(); i++) await new Promise((r) => setTimeout(r, 10)); assert.ok(ok(), what); };
+  const NONE = { calls: 0, quietFor: Infinity };
+  try {
+    const open = async (scope: string) => {
+      const r = await post(base + scope, INIT);
+      assert.equal(r.status, 200, r.text);
+      await post(base + scope, { jsonrpc: "2.0", method: "notifications/initialized" }, r.sid!);
+      return r.sid!;
+    };
+    const wait = (sid: string, id: number) => post(base + "bl", { jsonrpc: "2.0", id, method: "tools/call", params: { name: "browser_wait_for", arguments: { time: 30 } } }, sid);
+    const cancel = (sid: string, id: number) => post(base + "bl", { jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: id } }, sid);
+    let sid = await open("bl");
+    const a = wait(sid, 5);
+    await until(() => t.activity("blanket").calls === 1, "the blanket scope's call runs");
+    on.delete("bl");
+    assert.equal(t.activity("blanket").calls, 1, "the call runs on as the blanket Chrome's use");
+    assert.deepEqual(t.activity(), NONE, "no use of the main Chrome while it runs");
+    await cancel(sid, 5);
+    await until(() => t.activity("blanket").calls === 0, "the call's end");
+    assert.ok(t.activity("blanket").quietFor < 5_000, "the blanket Chrome's quiet time starts at the call's end");
+    assert.deepEqual(t.activity(), NONE, "its end is no use of the main Chrome");
+    assert.equal((await a).body?.error?.code, -32800, "the cancelled answer");
+    // C12's session_ended is the scope's drop (mcp/part.ts, sessionEnded).
+    on.add("bl");
+    const b = wait(sid, 6);
+    await until(() => t.activity("blanket").calls === 1, "a blanket call runs again");
+    on.delete("bl");
+    await t.dropScope("bl", "its agentwatch session ended");
+    await until(() => t.activity("blanket").calls === 0, "the session's end ends the call's count");
+    assert.deepEqual(t.activity(), NONE, "no use of the main Chrome at the session's end");
+    assert.equal((await b).body?.error?.code, -32603, "the answer of an ended MCP session");
+    sid = await open("bl");
+    const c = wait(sid, 7);
+    await until(() => t.activity().calls === 1, "the next call runs as the main Chrome's use");
+    assert.equal(t.activity("blanket").calls, 0, "no blanket count");
+    await cancel(sid, 7);
+    await until(() => t.activity().calls === 0, "the next call's end");
+    assert.equal((await c).body?.error?.code, -32800, "the cancelled answer");
+  } finally {
+    await new Promise<void>((r) => { server.closeAllConnections(); server.close(() => r()); });
+    await t.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
