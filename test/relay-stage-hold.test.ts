@@ -684,3 +684,45 @@ test("board ab-t30.35, m1 (a limit of C11): a hold whose dialog is still open at
     } finally { await h.close(); }
   }
 });
+
+test("board ab-253: the hover's DOM.describeNode answers with the node while the target's cross-origin frame loads a new document: no press (holdFrameLoads); with no new document the press goes", async () => {
+  for (const reload of [false, true]) {
+    let t!: FakeTab;
+    const r = await hold({ vector: crossHover(), maxMs: 1500, shot: (x) => `f${x}`, setup: (x) => { t = x; }, hook: (s) => {
+      if (!isAimRead(s)) return undefined;
+      if (reload) frameReload(t);
+      return Promise.resolve({ node: { nodeId: 0, backendNodeId: 900, nodeType: 1, nodeName: "BUTTON" } });
+    } });
+    assert.ok(r.tab.sent.some((s) => s.method === "DOM.getBoxModel" && s.child === "child" && s.params.backendNodeId === 900), "the hold read the box of the node that the hover's read gave");
+    if (!reload) {
+      assert.ok(r.res.ok && pressOf(r), "no new document: the press goes");
+      assert.equal(r.res.ok && r.res.end, "limit");
+      assert.equal(r.stage.counts.holdFrameLoads, undefined);
+      continue;
+    }
+    assert.deepEqual(r.res, { ok: false, why: HOLD_NOT.gone });
+    assert.equal(pressOf(r), undefined, "no press");
+    assert.equal(r.stage.counts.holdFrameLoads, 1);
+    assert.equal(r.stage.lock.held, 0, "the lock is free");
+  }
+});
+
+test("board ab-253: the end of the frame's session while its id is not known at the hover's setup (no attach record: the frame mapping reads it): no press; with no end the press goes", async () => {
+  for (const detach of [false, true]) {
+    let t!: FakeTab;
+    const r = await hold({ vector: crossHover(), noAttach: true, maxMs: 1500, shot: (x) => `f${x}`, setup: (x) => { t = x; }, hook: (s) => {
+      if (detach && s.method === "Target.getTargetInfo" && s.child === "child") t.stage.event(t, undefined, "Target.detachedFromTarget", { sessionId: "child" });
+      return undefined;
+    } });
+    assert.ok(r.tab.sent.some((s) => s.method === "Target.getTargetInfo" && s.child === "child"), "the mapping read the frame's id");
+    if (!detach) {
+      assert.ok(r.res.ok && pressOf(r), "no end: the press goes");
+      assert.equal(r.stage.counts.holdFrameLoads, undefined);
+      continue;
+    }
+    assert.deepEqual(r.res, { ok: false, why: HOLD_NOT.gone });
+    assert.equal(pressOf(r), undefined, "no press");
+    assert.equal(r.stage.counts.holdFrameLoads, 1);
+    assert.equal(r.stage.lock.held, 0, "the lock is free");
+  }
+});
