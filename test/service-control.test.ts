@@ -944,18 +944,17 @@ test("the vectors' blanketSetup lines: the fake and the stage 1a service have no
   }
 });
 
-// Board ab-4wh.18 (the re-check of ab-4wh.13, n1 and n2): a part that throws stops no later part; the first error is the
-// answer, and each later error gets one log line with its name only.
 const SECRET_TEXT = "a value that no log line may hold";
 const AT = { kind: "daemon", user: "u", via: "daemon" };
 function partsRig(foldCase: boolean) {
   const calls: string[] = [], logs: string[] = [];
-  const throwAt: { set?: number[]; end?: number[]; name?: number[] } = {};
+  const throwAt: { set?: number[]; end?: number[]; name?: number[]; badName?: number[] } = {};
+  const value = (i: number) => (throwAt.badName?.includes(i) ? Object.assign(new Error(SECRET_TEXT), { name: SECRET_TEXT }) : [new RangeError(SECRET_TEXT), new TypeError(SECRET_TEXT), SECRET_TEXT][i]);
   const parts = [0, 1, 2].map((i) => ({
     ops: {},
     features: () => ["remote_scopes"],
-    setSessions: () => { calls.push(`set ${i}`); if (throwAt.set?.includes(i)) throw (i === 0 ? new RangeError(SECRET_TEXT) : new TypeError(SECRET_TEXT)); },
-    sessionEnded: (s: string) => { calls.push(`end ${i} ${s}`); if (throwAt.end?.includes(i)) throw (i === 0 ? new RangeError(SECRET_TEXT) : new TypeError(SECRET_TEXT)); },
+    setSessions: () => { calls.push(`set ${i}`); if (throwAt.set?.includes(i)) throw value(i); },
+    sessionEnded: (s: string) => { calls.push(`end ${i} ${s}`); if (throwAt.end?.includes(i)) throw value(i); },
     nameEnded: (s: string) => { calls.push(`name ${i} ${s}`); if (throwAt.name?.includes(i)) throw new RangeError(SECRET_TEXT); },
   }));
   const svc = new Stage1a({ agentDoor: { url: (s) => `url:${s}`, state: () => ({ form: "pidfd" }) }, parts, foldCase, log: (l) => logs.push(l) });
@@ -967,29 +966,37 @@ function partsRig(foldCase: boolean) {
   return { set, end, calls, logs, throwAt };
 }
 
-test("board ab-4wh.18 (n1): when two parts throw at set_sessions, at session_ended or at a remote end, every part runs, the first error is the answer, and each later error gets one log line with its name, never its message", () => {
-  const later = (op: string) => `service: ${op}: one more part failed after the first error (TypeError)`;
+test("board ab-4wh.18 (n1): when two parts throw at set_sessions, at session_ended or at a remote end, every part runs, the first error is the answer, and each later error gets one log line with its name, never its message or a thrown value", () => {
+  const later = (op: string, kind: string) => `service: ${op}: one more part failed after the first error (${kind})`;
+  const logs: string[] = [];
   let r = partsRig(false);
   r.throwAt.set = [0, 1, 2];
   assert.throws(() => r.set(["s1"]), RangeError, "set_sessions answers the first error");
   assert.deepEqual(r.calls, ["set 0", "set 1", "set 2"]);
-  assert.deepEqual(r.logs, [later("set_sessions"), later("set_sessions")]);
+  assert.deepEqual(r.logs, [later("set_sessions", "TypeError"), later("set_sessions", "string")]);
+  logs.push(...r.logs);
   r = partsRig(false);
   r.set(["s1"]);
   r.throwAt.end = [0, 2];
   assert.throws(() => r.end("s1"), RangeError, "session_ended answers the first error");
   assert.deepEqual(r.calls.slice(3), ["end 0 s1", "end 1 s1", "end 2 s1"]);
-  assert.deepEqual(r.logs, [later("session_ended")]);
-  // Two remote items that the snapshot drops: their ends, then the parts' set_sessions; one error in each end and in
-  // the set gives one answer and three log lines.
+  assert.deepEqual(r.logs, [later("session_ended", "string")]);
+  logs.push(...r.logs);
+  r = partsRig(false);
+  r.set(["s1"]);
+  Object.assign(r.throwAt, { set: [0, 1], badName: [1] });
+  assert.throws(() => r.set(["s1"]), RangeError);
+  assert.deepEqual(r.logs, [later("set_sessions", "Error")], "an error whose name is any text");
+  logs.push(...r.logs);
   r = partsRig(false);
   r.set([], ["b/x", "b/y"]);
   r.calls.length = 0;
-  Object.assign(r.throwAt, { end: [1], set: [2] });
-  assert.throws(() => r.set([], []), TypeError, "the first error: the end of b/x at part 1");
+  Object.assign(r.throwAt, { end: [1], set: [0] });
+  assert.throws(() => r.set([], []), TypeError, "the first error: the end of b/x at part 1, not the set's RangeError");
   assert.deepEqual(r.calls, ["end 0 b/x", "end 1 b/x", "end 2 b/x", "end 0 b/y", "end 1 b/y", "end 2 b/y", "set 0", "set 1", "set 2"]);
-  assert.deepEqual(r.logs, [later("set_sessions"), later("set_sessions")]);
-  for (const l of r.logs) assert.ok(!l.includes(SECRET_TEXT), l);
+  assert.deepEqual(r.logs, [later("set_sessions", "TypeError"), later("set_sessions", "RangeError")]);
+  logs.push(...r.logs);
+  for (const l of logs) assert.ok(!l.includes(SECRET_TEXT), l);
 });
 
 test("board ab-4wh.18 (n2): on the Mac the end of a case twin's name reaches every part's nameEnded although one throws, and a remote end that throws at set_sessions keeps the snapshot from no part", () => {

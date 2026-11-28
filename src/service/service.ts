@@ -116,6 +116,14 @@ export const STAGE_1A_TEXTS = {
 /** At most this many ended scopes are kept in memory (the oldest goes first). */
 const ENDED_MAX = 4096;
 
+// C12, the log: no value in a log line, and an error's name can be set to any text (board ab-4wh.18).
+function errorKind(error: unknown): string {
+  if (!(error instanceof Error)) return typeof error;
+  let name: unknown;
+  try { name = error.name; } catch { return "Error"; }
+  return typeof name === "string" && /^[A-Za-z]{1,64}$/.test(name) ? name : "Error";
+}
+
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const HEX40 = /^[0-9a-f]{40}$/;
 
@@ -371,8 +379,7 @@ export class Stage1a implements Handler {
     return {
       run: (step) => {
         try { step(); } catch (error) {
-          // The log rules (C12): an error's message can hold a value, so the line names only its kind (board ab-4wh.18).
-          if (failed) this.log(`service: ${op}: one more part failed after the first error (${(error as Error)?.name ?? typeof error})`);
+          if (failed) this.log(`service: ${op}: one more part failed after the first error (${errorKind(error)})`);
           else failed = { error };
         }
       },
