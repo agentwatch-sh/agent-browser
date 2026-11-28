@@ -3144,7 +3144,7 @@ test("board ab-t30.33: C11, the input design and mac.json say a wheel point of t
   // The code still does what the texts say: wheelPoint tries the page's last point first and puts each grid point through
   // own(); the drag gives its unrounded start to shortFirstStep; the hold presses at the page's last point.
   for (const s of ["cands: Pt[] = last && inV(last) ? [last] : []", "const q = this.own(page, { x: V.x0 + (V.x1 - V.x0) * (0.5 + ((i % 5) - 2) * 0.18)",
-    "shortFirstStep(from, samples, DRAG_FIRST_STEP_PX", "st.last ?? h.cur", "handStep(h.cur, "])
+    "shortFirstStep(from, samples, DRAG_FIRST_STEP_PX", "st.last ?? h.cur", "handStep(h.cur, press"])
     assert.ok(code.includes(s), `stage.ts: ${s}`);
 });
 

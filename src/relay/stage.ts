@@ -783,8 +783,7 @@ export type StageOptions = {
   /**
    * "linux": a client's point rounded to a whole px (fit) and whole-ms timestamps; "mac": a client's point and the
    * timestamps keep their fractions. The paths and the stage's own points follow the person's `device.wholePx` (whole px
-   * on both platforms), not this field. The field also selects the keys: the select-all chord (Control or Meta), the
-   * editing commands on a Mac key, and the plans that pass unchanged on the Mac (paste, selectOption, setInputFiles).
+   * on both platforms), not this field. The key and text paths read it too (this.linux(); board ab-hfj).
    */
   platform: "linux" | "mac";
   clock?: StageClock;
