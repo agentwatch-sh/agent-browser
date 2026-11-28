@@ -205,15 +205,25 @@ export function parseTaskport(r: ToolRun): { read: string; exit: number | null; 
   const group = g === null ? null : (KNOWN_GROUPS as readonly string[]).includes(g) ? g : "other";
   const right = {
     class: klass, rule: rule.length ? rule : null, group, authenticateUser: bool("authenticate-user"), shared: bool("shared"), timeout: num("timeout"),
-    allowRoot: bool("allow-root"), sessionOwner: bool("session-owner"), tries: num("tries"), kOfN: num("k-of-n"), version: num("version"),
+    allowRoot: bool("allow-root"), entitled: bool("entitled"), entitledGroup: bool("entitled-group"), vpnEntitledGroup: bool("vpn-entitled-group"), sessionOwner: bool("session-owner"), tries: num("tries"), kOfN: num("k-of-n"), version: num("version"),
     mechanisms: Array.isArray(d.mechanisms) ? (d.mechanisms as string[]).length : null,
   };
-  return { read, exit: r.exit, right, meaning: taskportMeaning(right) };
+  const widens = WIDENING_KEYS.some((k) => d[k] !== undefined && d[k] !== false);
+  return { read, exit: r.exit, right, meaning: taskportMeaning(right, widens) };
 }
 
-/** The meaning of a parsed right (parseTaskport). */
-export function taskportMeaning(x: { class: string | null; rule: string[] | null; authenticateUser: boolean | null; shared: boolean | null; timeout: number | null }): TaskportMeaning {
+/**
+ * authd keys that can grant the right with no password (`entitled`, `entitled-group`, `vpn-entitled-group`, `allow-root`)
+ * or to a user outside the group (`session-owner`), or that replace how the credential is obtained (`mechanisms`).
+ * Source: Apple's open Security project, OSX/authd/rule.c rule_create_with_plist and OSX/authd/engine.m
+ * _evaluate_rule, _check_entitlement_for_rule, _evaluate_class_user (board ab-v16.97.19). `entitled` counts for every class.
+ */
+const WIDENING_KEYS = ["entitled", "entitled-group", "vpn-entitled-group", "allow-root", "session-owner", "mechanisms"];
+
+/** The meaning of a parsed right (parseTaskport); `widens`: a key of WIDENING_KEYS is present and is not false. */
+export function taskportMeaning(x: { class: string | null; rule: string[] | null; authenticateUser: boolean | null; shared: boolean | null; timeout: number | null }, widens = false): TaskportMeaning {
   if (x.class === "allow") return "allow: no password";
+  if (widens && (x.class === "deny" || x.class === "user")) return "another form";
   if (x.class === "deny") return "deny";
   if (x.class === "rule") return x.rule && x.rule.length === 1 && x.rule[0] === "allow" ? "allow: no password" : "a rule";
   if (x.class !== "user") return "another form";

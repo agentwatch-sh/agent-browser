@@ -405,6 +405,20 @@ test("board ab-v16.97.15: what each form of the taskport right means for the pro
     assert.equal(t.meaning, "another form", what);
     assert.equal(taskportHolds(t), "weak", `${what}: does not hold, a latch`);
   }
+  // Board ab-v16.97.19: authd keys that can widen the right fail closed; the measured form holds with the keys that authd writes as false.
+  const base = "<key>class</key><string>user</string><key>group</key><string>_developer</string><key>authenticate-user</key><true/><key>shared</key><true/><key>timeout</key><integer>36000</integer>";
+  assert.equal(taskportHolds(p(base + "<key>allow-root</key><false/><key>session-owner</key><false/><key>tries</key><integer>10000</integer><key>version</key><integer>0</integer>")), "holds", "the measured form of 2026-11-27 with all its keys");
+  assert.equal(taskportHolds(p(base + "<key>password-only</key><true/><key>securetoken-only</key><true/><key>extract-password</key><true/><key>require-apple-signed</key><true/>")), "holds", "keys that only narrow or do not touch the grant");
+  for (const key of ["entitled", "entitled-group", "vpn-entitled-group", "allow-root", "session-owner"]) {
+    for (const [value, how] of [["<true/>", "true"], ["<string>true</string>", "no flag"]] as const) {
+      const t = p(`${base}<key>${key}</key>${value}`);
+      assert.equal(t.meaning, "another form", `${key} ${how}`);
+      assert.equal(taskportHolds(t), "weak", `${key} ${how}: does not hold, a latch`);
+    }
+  }
+  assert.equal(p(base + "<key>mechanisms</key><array><string>builtin:authenticate</string></array>").meaning, "another form", "mechanisms");
+  assert.equal(taskportHolds(p("<key>class</key><string>deny</string><key>entitled</key><true/>")), "weak", "deny with entitled grants the entitled caller");
+  assert.equal(taskportHolds(p("<key>class</key><string>deny</string><key>entitled</key><false/>")), "holds");
   // The review's M3: a shared timeout of 0 is 0 (on 0c3b9e4: null); a shared right with no timeout has none.
   assert.equal(taskportSharedS(p("<key>class</key><string>user</string><key>shared</key><true/><key>timeout</key><integer>0</integer>")), 0);
   assert.equal(taskportSharedS(p("<key>class</key><string>user</string><key>shared</key><true/>")), null);
