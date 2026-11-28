@@ -6301,7 +6301,6 @@ test("board ab-t30.35: C11's part on the press and hold says each changed text o
   const stage = read("src/relay/stage.ts");
   for (const t of ["return answer({ ok: false, why: HOLD_NOT.dialog });", "if (now === REFUSED) { this.count(\"holdBoxErrors\"); return { ok: false, why: HOLD_NOT.gone }; }",
     "if (aim?.nodeError) { this.count(\"holdNodeErrors\"); return { ok: false, why: HOLD_NOT.gone }; }", "if (st.holdFrame?.loaded) { this.count(\"holdFrameLoads\"); return { ok: false, why: HOLD_NOT.gone }; }",
-    // Board ab-t30.36: the hover's setup records the frame before the hover's reads; a hover that kept no target keeps none.
-    "if (e.child !== undefined) { const frameId = st.frames.get(e.child)?.frameId; st.holdFrame = { child: e.child, frameId, loaded: false, ...(frameId === undefined ? { early: [] } : {}) }; }",
+    // Board ab-t30.36: a hover that kept no target keeps no frame record (the hold tests pin the record itself; board ab-253).
     "if (action === \"hover\" && st.aim === null) st.holdFrame = null;"]) assert.ok(stage.includes(t), t);
 });
