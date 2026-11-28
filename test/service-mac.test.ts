@@ -1236,6 +1236,32 @@ test("board ab-w6i: on the Mac a request that waits while Chrome A ends, and an 
   }
 });
 
+test("board ab-smr (the review of ab-w6i, Minor 3): on the Mac a request that waits while Chrome A ends, then an op start that fails, then the request's own start that fails too: the op start and the request each get the failure text, one start_failed, and the hold of a failed start at a use", async () => {
+  for (const taker of ["the part's watch", "the op start"] as const) {
+    const w = new World();
+    try {
+      const x = endPart(w, true, { what: ["ok", "fail", "fail"] });
+      assert.equal(await x.part.wake(() => x.part.unit.running()), null, "a use starts Chrome A");
+      const a = x.part.unit.chromePid()!;
+      const ready = () => x.part.unit.running() && x.part.unit.chromePid() !== a;
+      const waits = x.part.wake(ready);
+      await tick(20);
+      const mark = x.events.length, uses = w.logs.filter((l) => l.includes("an agent uses the agent browser")).length;
+      w.end(a);
+      if (taker === "the part's watch") assert.equal(x.part.unit.takeEnd((x.part as any).onUnitEvent), true);
+      const op = await x.part.startBrowser(null);
+      assert.ok("error" in op && /could not start: open exited with 1/.test(op.error), `the op start fails (${taker})`);
+      assert.equal(await waits, "The agent browser could not get ready: Google Chrome could not start: open exited with 1.", `the request gets the failure text (${taker})`);
+      assert.equal(x.calls.length, 3, `the request made its one start (${taker})`);
+      assert.equal(w.logs.filter((l) => l.includes("an agent uses the agent browser")).length - uses, 1);
+      assert.equal(w.logs.filter((l) => l.startsWith("unit: the start at an agent's use failed:")).length, 1);
+      assert.deepEqual(endSeq(x, mark), ["stopped idle", "stopped start_failed"], `one stopped idle, then one start_failed (${taker})`);
+      assert.deepEqual((x.part as any).useFail, { at: w.now, text: "Google Chrome could not start: open exited with 1" }, `the hold of a failed start at a use (${taker})`);
+      assert.equal(x.part.unit.running(), false);
+    } finally { w.close(); }
+  }
+});
+
 test("board ab-d35 (review I2): on Linux the supervisor after its backoff starts Chrome again when an op start ran Chrome during the backoff and that Chrome crashed, as before (gone, the line of a start again, ready)", async () => {
   const w = new World();
   let release!: () => void, napping = 0;
