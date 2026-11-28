@@ -470,8 +470,9 @@ function hold(env: NodeJS.ProcessEnv, signal?: NodeJS.Signals) {
   });
 }
 
-/** /proc/<pid> stays a little after the probe's SIGKILL and exit, until init reaps the stand-in: under load, longer (board ab-v16.97.18). */
+/** The probe SIGKILLs the stand-in and exits at once; /proc/<pid> stays until init reaps the orphan (board ab-v16.97.18). */
 async function gone(pid: number | null, ms = 5000): Promise<boolean> {
+  if (pid === null) return false;
   const end = Date.now() + ms;
   while (existsSync(`/proc/${pid}`)) {
     if (Date.now() > end) return false;
