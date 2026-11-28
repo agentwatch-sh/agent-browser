@@ -144,7 +144,7 @@ export type Relay = { model: Model; closed: Promise<void>; stop: () => Promise<v
   blanketModel: Model | null;
   /** The service's sessions or its blanket scope changed (RelayOptions.sessions): the gate reads its roots again. */
   sessionsChanged: () => void;
-  /** The blanket model's own traffic, as `traffic` (an MCP's own connection counts by its messages only). */
+  /** The blanket model's own traffic, as `traffic` (an MCP's own connection is none: board ab-4wh.28). */
   blanketTraffic: () => RelayTraffic };
 
 /**
@@ -273,8 +273,6 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
   let ended = false;
   // The main model's agents' traffic (board ab-v16.94.11; board ab-4wh.24: the blanket model's is apart): see Relay.traffic.
   let agents = 0, busy = 0, lastMessage: number | null = null;
-  // The blanket model's own use (board ab-4wh.3; its stop by use): its agents' open connections, the messages of any of
-  // its connections that run (an MCP's own ticket connection counts only by its traffic), and the last one's time.
   let blanketAgents = 0, blanketBusy = 0, blanketLast: number | null = null;
   const now = () => performance.now();
   /** The upgrades that wait for the service's start at a use: the relay's stop ends them. */
@@ -322,14 +320,15 @@ export async function startRelay(o: RelayOptions): Promise<Relay> {
         const agent = !a.own;
         const ofBlanket = blanketModel !== null && model === blanketModel;
         const mainAgent = agent && !ofBlanket;
+        const blanketAgent = agent && ofBlanket;
         if (mainAgent) agents++;
-        if (agent && ofBlanket) blanketAgents++;
-        ws.once("close", () => { if (mainAgent) agents--; if (agent && ofBlanket) blanketAgents--; });
+        if (blanketAgent) blanketAgents++;
+        ws.once("close", () => { if (mainAgent) agents--; if (blanketAgent) blanketAgents--; });
         ws.on("message", (data) => {
           let msg: unknown;
           try { msg = JSON.parse(String(data)); } catch { o.log(`relay: a message of ${String(data).length} bytes is not JSON`); return; }
-          if (ofBlanket) { blanketBusy++; blanketLast = now(); }
-          const blanketDone = () => { if (ofBlanket) { blanketBusy--; blanketLast = now(); } };
+          if (blanketAgent) { blanketBusy++; blanketLast = now(); }
+          const blanketDone = () => { if (blanketAgent) { blanketBusy--; blanketLast = now(); } };
           if (!mainAgent) { void model.onMessage(conn, msg).finally(blanketDone); return; }
           busy++;
           lastMessage = now();

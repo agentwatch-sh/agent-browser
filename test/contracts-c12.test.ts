@@ -3072,18 +3072,18 @@ test("board ab-4wh.8: C12 says that a use of the blanket scope starts the unit's
   assert.ok(unitPart.includes("try { return await this.unit.stop({ keepXvfb: why === \"idle\", ...(begins ? { begins } : {}) }); }"), "only the stop by use keeps Xvfb");
 });
 
-test("board ab-4wh.24: C12 says that each Chrome's stop by use counts only the use of its own scopes; the service's main use signal reads the main model's traffic and the main Chrome's MCP tool calls, and the blanket Chrome's reads the blanket model's", () => {
+test("board ab-4wh.24: C12 says that each Chrome's stop by use counts only the use of its own scopes; the service's main use signal reads the main model's traffic and the main Chrome's MCP tool calls, and the blanket Chrome's reads the blanket model's agents' traffic and the blanket scope's MCP tool calls (board ab-4wh.28)", () => {
   const p = part(C12, BLANKET_C12_HEADING);
   assert.ok(says(p, `starts Xvfb again (board ab-4wh.25). ${BLANKET_STOP_OWN_USE} Xvfb stops at the later of the two stops;`), "the sentence in the item of the stop");
-  // The code: the relay counts a blanket connection only in blanketTraffic, the transport a blanket scope's tool call
-  // only in activity("blanket"), and the service's main signal reads traffic() and activity() (the tests are
-  // test/blanket-scope.test.ts, test/service-mcp-blanket.test.ts and test/service-blanket-door.test.ts).
+  // The code's tests: test/blanket-scope.test.ts, test/service-mcp-blanket.test.ts and test/service-blanket-door.test.ts.
   const endpoint = read("src/relay/endpoint.ts");
   assert.ok(endpoint.includes("const mainAgent = agent && !ofBlanket;") && endpoint.includes("if (mainAgent) agents++;") && endpoint.includes("if (!mainAgent) { void model.onMessage(conn, msg).finally(blanketDone); return; }"), "the relay's main traffic");
+  assert.ok(endpoint.includes("const blanketAgent = agent && ofBlanket;") && endpoint.includes("if (blanketAgent) { blanketBusy++; blanketLast = now(); }"), "the relay's blanket traffic: its agents only");
   const transport = read("src/service/mcp/transport.ts");
   assert.ok(transport.includes("using = this.o.blanket?.(scope) ? this.use.blanket : this.use.main;"), "the transport's two counts");
   const svc = read("src/service/service.ts");
-  assert.ok(svc.includes("const t = agent?.traffic();") && svc.includes('if (mcp && mcp.activity().calls > 0) n.push("mcp");') && svc.includes("relay.blanketTraffic();"), "the two signals");
+  assert.ok(svc.includes("const t = agent?.traffic();") && svc.includes('if (mcp && mcp.activity().calls > 0) n.push("mcp");') && svc.includes("relay.blanketTraffic(), m = mcp?.activity(\"blanket\");"), "the two signals");
+  assert.ok(svc.includes("inUse: (!!u && (u.agents > 0 || u.busy > 0)) || (m?.calls ?? 0) > 0, quietFor: Math.min(u?.quietFor ?? Infinity, m?.quietFor ?? Infinity)"), "the blanket signal counts the blanket scope's tool calls");
 });
 
 test("board ab-4wh.25: C12 says each of its three texts of the unit's Xvfb while the blanket Chrome's start runs, exactly, and no old text; the service does so: the unit's stop decides under its lock as it begins and logs that one choice, and the blanket Chrome's start counts as a use of Xvfb; the hold-off's 503 is no contract text", async () => {
