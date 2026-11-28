@@ -2,19 +2,19 @@
 // docs/superpowers/specs/2026-11-26-stored-sign-ins-mac-design.md, section 8, "The Mac live check", steps 1 to 4;
 // test/live/README.md, "The Mac live check of the stored sign-ins").
 //
-//   node test/live/sign-in-act-mac/harness.ts serve --service-log <file> --sign-in-log <file> [--port 48731] [--minutes 30]
+//   node test/live/sign-in-act-mac/harness.ts serve --service-log <file> --sign-in-log <file> [--port <n>] [--minutes 30]
 //   node test/live/sign-in-act-mac/harness.ts check --folder <folder> --window <a> --front-changed <a> [--keep]
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, closeSync, mkdtempSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, request } from "node:http";
 import { constants, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  ANSWER_FILE, EXIT_FILE, HARNESS, POST_MAX_BYTES, RUN_FILE, SCAN_MAX_BYTES, SITE_FILE, STOP_HEADER, STOP_PATH, VERSION,
-  applyEvent, checkResult, eventLine, newSiteState, originOf, parseArgs, resultOf, setupText, siteAnswer, testValues,
-  type ScanText, type SiteState, type TestValues,
+  ANSWER_FILE, EXIT_FILE, HARNESS, HEAD_MAX, POST_MAX_BYTES, RUN_FILE, SCAN_MAX_BYTES, SITE_FILE, STOP_HEADER, STOP_PATH, VERSION,
+  applyEvent, checkResult, eventLine, newSiteState, isAscii, originOf, parseArgs, resultOf, scanFrom, setupText, siteAnswer, testValues,
+  type LogMark, type ScanText, type SiteState, type TestValues,
 } from "./parts.ts";
 
 const args = parseArgs(process.argv.slice(2));
@@ -26,6 +26,15 @@ if ("error" in args) {
 const writeJson = (file: string, value: unknown) => {
   writeFileSync(`${file}.tmp`, JSON.stringify(value), { mode: 0o600 });
   renameSync(`${file}.tmp`, file);
+};
+
+const headOf = (file: string, len: number): string | null => {
+  try {
+    const buf = Buffer.alloc(len);
+    const fd = openSync(file, "r");
+    try { if (readSync(fd, buf, 0, len, 0) < len) return null; } finally { closeSync(fd); }
+    return createHash("sha256").update(buf).digest("hex");
+  } catch { return null; }
 };
 
 if (args.cmd === "serve") {
@@ -72,9 +81,10 @@ if (args.cmd === "serve") {
   process.on("uncaughtException", (e) => { process.stderr.write(`${HARNESS}: ${(e as Error).message}\n`); end(1, "an error"); });
   let port = args.port;
   const stat = (f: string) => { try { const st = statSync(f, { bigint: true }); return { ino: String(st.ino), size: Number(st.size) }; } catch { return { ino: null, size: 0 }; } };
-  // The service log only grows between rotations; agentwatch writes its sign-in log whole, a new file at each write
-  // (statefiles.write_json).
-  const serviceLog = { path: resolve(args.serviceLog), ...stat(resolve(args.serviceLog)) };
+  const serviceFile = resolve(args.serviceLog);
+  const startStat = stat(serviceFile);
+  const headLen = Math.min(startStat.size, HEAD_MAX);
+  const serviceLog = { path: serviceFile, ...startStat, headLen, head: headLen > 0 ? headOf(serviceFile, headLen) : null };
   const signInLog = { path: resolve(args.signInLog) };
   server.once("error", (e) => { process.stderr.write(`${HARNESS}: the server cannot listen on 127.0.0.1:${args.port} (${(e as NodeJS.ErrnoException).code ?? e.message})\n`); end(1, "no server"); });
   server.listen(args.port, "127.0.0.1", () => {
@@ -88,12 +98,12 @@ if (args.cmd === "serve") {
   });
 } else {
   const { folder } = args;
-  let run: { port: number; token: string; user: string; pass: string; serviceLog: { path: string; ino: string | null; size: number }; signInLog: { path: string } };
+  let run: { port: number; token: string; user: string; pass: string; serviceLog: LogMark & { path: string }; signInLog: { path: string } };
   let site: SiteState;
   try {
     run = JSON.parse(readFileSync(join(folder, RUN_FILE), "utf8"));
     site = JSON.parse(readFileSync(join(folder, SITE_FILE), "utf8"));
-    if (!Number.isInteger(run.port) || typeof run.user !== "string" || typeof run.pass !== "string" || typeof run.serviceLog?.path !== "string" || !Number.isInteger(run.serviceLog.size)
+    if (!Number.isInteger(run.port) || typeof run.user !== "string" || typeof run.pass !== "string" || typeof run.serviceLog?.path !== "string" || !Number.isInteger(run.serviceLog.size) || !Number.isInteger(run.serviceLog.headLen) || !isAscii(run.user + run.pass)
       || typeof run.signInLog?.path !== "string" || !Array.isArray(site.posts)) throw new Error("its form");
   } catch {
     // JSON.parse's message can quote run.json, and run.json holds the test values.
@@ -101,11 +111,11 @@ if (args.cmd === "serve") {
     process.exit(2);
   }
   const values: TestValues = { user: run.user, pass: run.pass };
-  const read = (file: string, after?: { ino: string | null; size: number }): { text: string | null; why?: string } => {
+  const read = (file: string, after?: LogMark): { text: string | null; why?: string } => {
     try {
       const st = statSync(file, { bigint: true });
       const size = Number(st.size);
-      const from = after && after.ino === String(st.ino) && size >= after.size ? after.size : 0;
+      const from = after ? scanFrom(after, { ino: String(st.ino), size, headOf: (len) => headOf(file, len) }) : 0;
       if (size - from > SCAN_MAX_BYTES) return { text: null, why: `more than ${SCAN_MAX_BYTES >> 20} MiB to read` };
       const buf = Buffer.alloc(size - from);
       const fd = openSync(file, "r");
