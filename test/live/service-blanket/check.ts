@@ -11,9 +11,9 @@
 //   3. Chrome installs the receiver in the new profile from the external extensions file, starts the host shim from
 //      the blanket profile's own host manifest, and the shim reaches link-blanket.sock, whose peer check admits it (its
 //      parent is the blanket Chrome); the main link never sees it;
-//   4. the pinned receiver (0.3.15) has no feature `blanket` (C4's "*" comes with 0.3.16): the use gets the too-old
-//      503, no "*" goes, the blanket Chrome stops, and status says why. With a receiver that has the feature, the
-//      client is admitted to the blanket model, and a local host is refused with the public host class's text;
+//   4. the receiver's feature `blanket` decides (C4's "*" comes with 0.3.16): with the feature, the client is admitted
+//      to the blanket model, and a local host is refused with the public host class's text; a receiver without it
+//      gives the use the too-old 503, no "*" goes, the blanket Chrome stops, and status says why;
 //   5. the address proxy (board ab-4wh.6; C11, the blanket profile): no proxy listens before the use; the blanket
 //      Chrome's argv holds the proxy's flags before the chrome_args, and the main Chrome's argv holds none; a tab of the
 //      blanket scope opens http://public.test:<port>/ (Chrome cannot resolve .test: only the proxy can, and its test hook
@@ -228,7 +228,7 @@ try {
   const item = st.sessions.find((s: any) => s.scope === "live-bl");
   check("status: the main Chrome's state is off and chrome_pid null while only Xvfb and the blanket Chrome run", st.state === "off" && st.chrome_pid === null, JSON.stringify({ state: st.state, chrome_pid: st.chrome_pid }));
   if (cdp === null) {
-    check("the pinned receiver has no feature blanket: the use gets the too-old 503", refusal.includes(TOO_OLD), refusal);
+    check("the receiver has no feature blanket: the use gets the too-old 503", refusal.includes(TOO_OLD), refusal);
     check("no \"*\" went: the service sent no set_scopes on the blanket link", !/blanket: link: .*set_scopes/.test(serviceErr) && !serviceErr.includes("blanket: the blanket Chrome of the session live-bl is ready"));
     await until("the blanket Chrome stops", () => blanketChromes().length === 0, 20_000);
     check("status: blanket true, blanket_state failed, list null, and the operator's sentence", item.blanket === true && item.blanket_state === "failed" && item.list === null && st.operator_text.includes("The blanket Chrome of the session live-bl could not start: the blanket profile's extension is too old for the blanket profile."), JSON.stringify(item));
