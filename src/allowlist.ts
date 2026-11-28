@@ -9,6 +9,7 @@
 import { readFileSync } from "node:fs";
 import { NotAllowedError, UsageError } from "./errors.ts";
 import { ANY_HOST, publicHost } from "./host-class.ts";
+import { covers, normalizeEntry } from "./relay/scopes.ts";
 
 const HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
@@ -47,6 +48,18 @@ export function isAllowedUrl(url: string, allow: readonly string[]): boolean {
   const host = u.hostname.toLowerCase();
   // A blanket scope's "*" (validateAllowlist): every host of the class, never a local or IP host.
   return allow.some((d) => (d === ANY_HOST ? publicHost(host) : host === d || host.endsWith("." + d)));
+}
+
+/**
+ * The receiver (chrome-extension agent/guard.js covered, agent/scopes.js listCovers) keeps only the entries that C5
+ * writes as they are; validateAllowlist also takes "localhost", an IPv4 address
+ * (test/vectors/chrome-extension-83fd4c3/scopes.json refuses both) and a name of more than 253 characters. Two gaps
+ * stay, both of a blanket list: its copy here is {"allow":["*"]}, without the box's own names (C4's exclude), which the
+ * guard refuses; and the receiver's public class has no length limit of a name or a label, which publicHost has (only
+ * a name that DNS cannot resolve is that long). Board ab-81e, from the code of the pinned receiver.
+ */
+export function guardCovers(host: string, allow: readonly string[]): boolean {
+  return covers(allow.filter((d) => d === ANY_HOST || normalizeEntry(d) === d), host);
 }
 
 export function assertAllowedUrl(url: string, allow: readonly string[]): void {

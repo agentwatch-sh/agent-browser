@@ -73,7 +73,6 @@ export function redirectError(e: unknown, requested: string, blocked?: string): 
   if (!(e instanceof NotAllowedError)) return e;
   const host = e.host === UNREAD_HOST ? blocked ?? UNREAD_HOST : e.host, site = safeHost(requested);
   if (host === site) return e;
-  // Where the tab is: on the named host, else (no host in the tab's URL) on a blank page or a page with no host.
   const where = e.host !== UNREAD_HOST ? "there" : e.blank ? "on a blank page" : `on a page whose host the agent browser could not read`;
   return new NotAllowedError(host === UNREAD_HOST ? "" : `https://${host}/`, `refusing: ${site} redirected the tab to ${host}, which is not on the allowlist${signInHint(host, site)}. The tab stays open ${where}; agent-browser does not touch it`);
 }
@@ -106,9 +105,16 @@ export class ChromeUnreachableError extends AgentBrowserError {
  */
 export const UNREAD_HOST = "a host that the agent browser could not read";
 
-/** The host of a URL for a message, never the full URL: UNREAD_HOST when it has none or does not parse. */
+/**
+ * The host of a URL for a message, never the full URL: UNREAD_HOST when it has none or does not parse. Chrome's error
+ * page (chrome-error://chromewebdata/, the document of a navigation that failed) names no site: "chromewebdata" is
+ * Chrome's own name, so that page gives UNREAD_HOST too (board ab-81e).
+ */
 export function safeHost(url: string): string {
-  try { return new URL(url).hostname || UNREAD_HOST; } catch { return UNREAD_HOST; }
+  try {
+    const u = new URL(url);
+    return u.protocol === "chrome-error:" ? UNREAD_HOST : u.hostname || UNREAD_HOST;
+  } catch { return UNREAD_HOST; }
 }
 
 /** The stable code of any thrown value: an AgentBrowserError's own, else "error". */

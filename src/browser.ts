@@ -10,7 +10,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync, renameSync, statSync, rmSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { CDPConnection, CDPError } from "./cdp.ts";
-import { assertAllowedUrl, assertNavigationUrl, isAllowedUrl, loadAllowlist, validateAllowlist } from "./allowlist.ts";
+import { assertAllowedUrl, assertNavigationUrl, guardCovers, isAllowedUrl, loadAllowlist, validateAllowlist } from "./allowlist.ts";
 import { AgentBrowserError, ChromeUnreachableError, DialogError, NotAllowedError, TabNotFoundError, UsageError, runCleanup, withCleanupErrors } from "./errors.ts";
 import { assertTestStateIsolated, recordDir, recordPath, resolveOptions, windowPerPage, type BrowserOptions, type Settings } from "./options.ts";
 import { withFileLock } from "./lock.ts";
@@ -752,32 +752,34 @@ export class Tab {
   // ---- the host of a blocked navigation (board ab-nfn)
 
   /**
-   * By frame id: the host of the frame's last navigation off the allowlist since the tab's last goto, or undefined after
-   * a commit on the list. The extension that guards the agent browser sends a tab whose main frame starts a navigation off
-   * its list to about:blank (chrome-extension agent/guard.js, layers 2 and 3), so the tab's URL names no host after it;
-   * the operator's prompt names the host of that navigation's URL, and this record keeps the same host from Chrome's events.
+   * The extension that guards the agent browser sends a tab whose main frame starts a navigation off its list to
+   * about:blank (chrome-extension agent/guard.js, layers 2 and 3), so the tab's URL names no host after it; the
+   * operator's prompt names the host of that navigation's URL.
    */
   private readonly navigationsOff = new Map<string, string | undefined>();
-  /** The main frame's id from a commit of the main frame, when Tab.frameId has not read it yet. */
-  private committedMainFrame: string | undefined;
   private offNavigations: (() => void) | undefined;
 
   /**
-   * Record, from here on, the host of each navigation off the allowlist (Tab.blockedHost). Measured on the Linux server
-   * (Chromium 156, 2026-11-27): a script's location change gives Page.frameRequestedNavigation (currentTab) and
-   * Page.frameStartedNavigating with the new URL, before any commit; an HTTP redirect gives no event with the new URL
-   * before the commit (Page.frameNavigated); an error page commits as chrome-error://chromewebdata/ with the failed URL
-   * in unreachableUrl.
+   * Measured on the Linux server (Chromium 156, 2026-11-27): a script's location change gives
+   * Page.frameRequestedNavigation (currentTab) and Page.frameStartedNavigating with the new URL, before any commit; an
+   * HTTP redirect gives no event with the new URL before the commit (Page.frameNavigated); an error page commits as
+   * chrome-error://chromewebdata/ with the failed URL in unreachableUrl.
+   *
+   * From the code, not measured on Chrome (board ab-81e): a subframe of the page's process sends its events on this
+   * session with its own id; a cross-site subframe in a process of its own is a target of its own (type iframe), which
+   * agent-browser never attaches (no Target.setAutoAttach for frames; record.ts attaches workers only), so no event of
+   * it reaches this connection. A navigation of the top frame that a subframe starts (target _top) is the main frame's:
+   * its events name the frame that navigates (the CDP docs).
    */
   private watchNavigations(): void {
     this.navigationsOff.clear();
     if (this.offNavigations) return;
-    const conn = this.browser.conn;
+    const conn = this.browser.conn, allow = this.browser.allow;
     const seen = (frameId: unknown, url: unknown, committed: boolean) => {
       if (typeof frameId !== "string" || typeof url !== "string") return;
       const web = webUrlOf(url);
       if (web === undefined) return; // about:blank, data:, chrome-error: the extension's guard judges no host there either
-      if (!isAllowedUrl(web.href, this.browser.allow)) this.navigationsOff.set(frameId, web.hostname);
+      if (!guardCovers(web.hostname, allow)) this.navigationsOff.set(frameId, web.hostname);
       else if (committed) this.navigationsOff.set(frameId, undefined);
     };
     const offs = [
@@ -787,23 +789,19 @@ export class Tab {
       conn.on("Page.frameStartedNavigating", (p: { frameId?: unknown; url?: unknown }, sid?: string) => {
         if (sid === this.sessionId) seen(p?.frameId, p?.url, false);
       }),
-      conn.on("Page.frameNavigated", (p: { frame?: { id?: unknown; parentId?: unknown; url?: unknown; unreachableUrl?: unknown } }, sid?: string) => {
-        if (sid !== this.sessionId || !p?.frame || p.frame.parentId) return;
-        if (typeof p.frame.id === "string") this.committedMainFrame = p.frame.id;
-        seen(p.frame.id, p.frame.unreachableUrl || p.frame.url, true);
+      conn.on("Page.frameNavigated", (p: { frame?: { id?: unknown; url?: unknown; unreachableUrl?: unknown } }, sid?: string) => {
+        if (sid === this.sessionId && p?.frame) seen(p.frame.id, p.frame.unreachableUrl || p.frame.url, true);
       }),
     ];
     this.offNavigations = () => { for (const off of offs) off(); };
   }
 
   /**
-   * The host of the main frame's last navigation off the allowlist since the tab's last goto (Tab.watchNavigations), for a
-   * redirect refusal whose tab URL names no host (redirectError); undefined when none is known. It sends no CDP call: the
-   * main frame's id is the one that the refusal's frame-tree read cached (Tab.assertAllowed), else that of a commit.
+   * Limit: a refusal that comes before the connection's first frame-tree read (a listed URL off the list with no host,
+   * or the pinned window) has no main frame id yet, so it gets the plain words (board ab-81e).
    */
   blockedHost(): string | undefined {
-    const main = this.mainFrameId ?? this.committedMainFrame;
-    return main === undefined ? undefined : this.navigationsOff.get(main);
+    return this.mainFrameId === undefined ? undefined : this.navigationsOff.get(this.mainFrameId);
   }
 
   private onDialog(type: string, message: string): void {
