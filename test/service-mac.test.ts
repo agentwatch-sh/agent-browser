@@ -680,15 +680,22 @@ test("board ab-v16.94.35: the stop by use's line on the Mac names Chrome only (t
   }
 });
 
-test("board ab-4wh.25: on Linux the stop by use's line tells Xvfb's fate once, and the stop does what it says: a blanket Chrome that ends, or a blanket start that comes, during the main Chrome's stop changes neither the line nor the stop's choice", async () => {
+test("board ab-4wh.25: on Linux the stop by use's line tells Xvfb's fate once, and the stop does what it says: a blanket Chrome that ends during the main Chrome's stop leaves Xvfb to the next release; a blanket start that comes during the stop changes neither the line nor the choice, waits for the stop's end, and then starts Xvfb again", async () => {
   for (const usedAtStart of [true, false]) {
     const w = new World();
     try {
-      let used = usedAtStart, mainPid = 0;
-      const part = new UnitPart({
+      let used = usedAtStart, mainPid = 0, lockedAtStart = false;
+      let blanketStart: Promise<void> | null = null;
+      const part: InstanceType<typeof UnitPart> = new UnitPart({
         paths: w.paths, procs: w.procs, tools: new FakeTools(), owner: new Owner(async () => ({ active: "active", sub: "running", mainPid: process.pid }), () => {}), log: (l) => w.logs.push(l),
         endpoint: () => ({ form: "pidfd" }), sessionsComplete: () => true, clock: () => w.now,
-        unit: w.deps(new FakeTools(), { displays: { first: 173, last: 175 }, xvfbUser: () => used, kill: (pid, sig) => { if (Math.abs(pid) === mainPid) used = !usedAtStart; w.kill(pid, sig); } }),
+        unit: w.deps(new FakeTools(), { displays: { first: 173, last: 175 }, xvfbUser: () => used, kill: (pid, sig) => {
+          if (Math.abs(pid) === mainPid && used === usedAtStart) {
+            used = !usedAtStart;
+            if (!usedAtStart) { lockedAtStart = part.unit.locked; blanketStart = part.unit.startForBlanket(); }
+          }
+          w.kill(pid, sig);
+        } }),
       });
       part.attach(() => {});
       part.onConfig({ enabled: true, chrome_bin: "/usr/bin/chromium", chrome_args: [] });
@@ -699,7 +706,7 @@ test("board ab-4wh.25: on Linux the stop by use's line tells Xvfb's fate once, a
       await (part as any).idleCheck();
       assert.equal(part.unit.running(), false, "the stop by use ran");
       assert.equal(used, !usedAtStart, "the use flipped during the stop");
-      const lines = w.logs.filter((l) => l.startsWith("unit: no agent used the agent browser") || (l.startsWith("unit: Xvfb :") && !l.includes("(pid")));
+      const lines = w.logs.filter((l) => l.startsWith("unit: no agent used the agent browser") || (l.startsWith("unit: Xvfb :") && l.includes(" stays")));
       if (usedAtStart) {
         assert.deepEqual(lines, ["unit: no agent used the agent browser for 10 min; stopping Chrome; Xvfb stays for the blanket Chrome (the profile stays)"]);
         assert.ok(w.alive(xvfb.pid), "Xvfb stays, as the line says");
@@ -708,9 +715,12 @@ test("board ab-4wh.25: on Linux the stop by use's line tells Xvfb's fate once, a
         assert.ok(w.logs.includes(`unit: Xvfb :${xvfb.display} (pid ${xvfb.pid}) stopped: no Chrome runs on it`));
       } else {
         assert.deepEqual(lines, ["unit: no agent used the agent browser for 10 min; stopping Chrome and Xvfb (the profile stays)"]);
+        assert.ok(lockedAtStart && blanketStart, "the blanket start began while the stop held the unit's lock");
         assert.ok(!w.alive(xvfb.pid), "Xvfb stops, as the line says");
-        await part.unit.startForBlanket();
-        assert.deepEqual([w.named("Xvfb").length, w.named("Xvfb")[0].pid !== xvfb.pid], [1, true], "the blanket start after the stop starts its own Xvfb");
+        await blanketStart;
+        const alone = w.logs.findIndex((l) => /^unit: Xvfb :\d+ runs for the blanket Chrome alone; the main Chrome does not start$/.test(l));
+        assert.ok(w.logs.indexOf("unit: stopped") >= 0 && alone > w.logs.indexOf("unit: stopped"), "the blanket start waited for the stop's end");
+        assert.deepEqual([w.named("Xvfb").length, w.named("Xvfb")[0].pid !== xvfb.pid], [1, true], "then it started Xvfb again");
       }
       await part.stop();
     } finally { w.close(); }

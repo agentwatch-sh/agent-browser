@@ -17,9 +17,9 @@
 //   60 s; three failed starts in a row report once. On the Mac (board ab-xxh) a wanted Chrome that ended with no stop of
 //   the service is a stop by use: the supervisor does not start it again, and the next use does.
 // - The blanket Chrome (board ab-4wh.8; C12, the blanket profile) runs on the unit's Xvfb, which runs while either
-//   Chrome runs: a use of the blanket scope starts Xvfb alone (startForBlanket), the main Chrome's stop by use keeps it
-//   while the blanket Chrome runs, and releaseXvfb stops it when no Chrome runs on it. Its record says `wanted: false`
-//   then, so a new service stops it (adopt), after its sweep stopped the blanket Chrome.
+//   Chrome runs or its start runs: a use of the blanket scope starts Xvfb alone (startForBlanket), the main Chrome's stop
+//   by use keeps it while the blanket Chrome runs or its start runs, and releaseXvfb stops it when no Chrome runs on it.
+//   Its record says `wanted: false` then, so a new service stops it (adopt), after its sweep stopped the blanket Chrome.
 //
 // The Mac (board ab-v16.94.6; the design, section 10): with `mac` (mac-chrome.ts) the unit runs the operator's own Google
 // Chrome.app a second time on the agent profile, through `open -n -g`, and finds the new Chrome's main process on the

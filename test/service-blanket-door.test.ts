@@ -21,7 +21,7 @@ import { ControlDoor } from "../src/service/control.ts";
 import type { UnitState } from "../src/service/unit/owner.ts";
 import type { UnitDeps } from "../src/service/unit/unit.ts";
 import { BLANKET_FEATURE } from "../src/service/blanket/part.ts";
-import { FAIL_HOLD_TEXT } from "../src/service/unit/part.ts";
+import { FAIL_HOLD_MS, FAIL_HOLD_TEXT } from "../src/service/unit/part.ts";
 import { FakeReceiver, raw, until } from "./fake-bridge.ts";
 import { DAEMON_HELLO, daemonClient } from "./fake-daemon.ts";
 import { NO_SCOPE, Peer, RootState, sessionRefusal, type PeerReader } from "../src/relay/peer.ts";
@@ -800,8 +800,8 @@ test("ab-4wh.12 m4, the Mac's form: the service keeps one case twin and drops th
 
 // ------------------------------------------------------------------ the unit's Xvfb alone (board ab-4wh.8)
 // C12, the blanket profile: on Linux a use of the blanket scope starts the unit's Xvfb alone and then the blanket
-// Chrome; the main Chrome does not start. Xvfb runs while either Chrome runs: the stop by use of one keeps the other
-// and Xvfb, and Xvfb stops at the later of the two stops. The daemon's `stop` stops both Chromes and Xvfb.
+// Chrome; the main Chrome does not start. Xvfb runs while either Chrome runs or its start runs: the stop by use of one
+// keeps the other and Xvfb, and Xvfb stops at the later of the two stops. The daemon's `stop` stops both Chromes and Xvfb.
 
 const xvfbPids = (x: { w: World }) => x.w.named("Xvfb").map((p) => p.pid);
 const unitRecord = (x: { w: World }) => JSON.parse(readFileSync(x.w.paths.unitFile, "utf8"));
@@ -1107,7 +1107,7 @@ test("ab-4wh.8 M1: a service that no longer owns leaves Xvfb, for the next owner
   } finally { await bl.close().catch(() => {}); }
 });
 
-test("ab-4wh.8 M2: in the hold-off after a fail-closed stop, a use of the blanket scope starts no Xvfb and no Chrome, and the state stays failed closed; board ab-4wh.25: its 503 names the hold-off", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+test("ab-4wh.8 M2: in the hold-off after a fail-closed stop, a use of the blanket scope starts no Xvfb and no Chrome, and the state stays failed closed; board ab-4wh.25: its 503 names the hold-off, the service logs the refusal once, and the blanket state is stopped, with no sentence of a failed start in operator_text, also after the hold-off", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
   const x = await svc(t);
   await x.sessions([session("bl", { blanket: true })]);
   assert.deepEqual(await x.part!.startBrowser(null), { data: {} });
@@ -1117,7 +1117,14 @@ test("ab-4wh.8 M2: in the hold-off after a fail-closed stop, a use of the blanke
   assert.deepEqual([x.w.named("chromium").length, xvfbPids(x).length], [0, 0]);
   const r = await raw(x.url("bl"));
   assert.deepEqual([r.status, r.body], [503, FAIL_HOLD_TEXT], "the hold-off's text, not a missing Xvfb");
-  assert.equal(FAIL_HOLD_TEXT, "The agent browser is not ready: it closed for safety less than 60 s ago, and it gets ready again at an agent's use after that time.");
+  assert.ok(FAIL_HOLD_TEXT.includes(`less than ${FAIL_HOLD_MS / 1000} s ago`), "the hold-off's time");
   assert.equal(x.w.spawned.length, before, "no Xvfb and no Chrome started in the hold-off");
-  assert.equal((x.state.status() as any).state, "failed closed");
+  assert.deepEqual(x.logs.filter((l) => l.startsWith("blanket: a use of the blanket scope in the hold-off")), ["blanket: a use of the blanket scope in the hold-off after a fail-closed stop starts no blanket Chrome"], "one log line of the refusal");
+  assert.ok(!x.logs.some((l) => l.includes("could not start")), "no failed start in the log");
+  for (const when of ["in the hold-off", "after the hold-off"]) {
+    if (when === "after the hold-off") (x.part as any).failClosedAt -= FAIL_HOLD_MS;
+    const st = x.state.status() as any;
+    assert.deepEqual([st.state, st.sessions[0].blanket_state], ["failed closed", "stopped"], when);
+    assert.ok(!st.operator_text.includes("could not start") && !st.operator_text.includes("s ago"), `${when}: no sentence of a failed blanket start: ${st.operator_text}`);
+  }
 });

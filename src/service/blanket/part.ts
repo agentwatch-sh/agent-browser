@@ -31,7 +31,7 @@ import type { ServicePart } from "../part.ts";
 import type { ReceiverPort } from "../receiver.ts";
 import type { AllowlistLine, Root } from "../lists/scopes.ts";
 import type { StopWhy } from "../unit/part.ts";
-import { useFailed } from "../unit/part.ts";
+import { FAIL_HOLD_TEXT, useFailed } from "../unit/part.ts";
 import { BLANKET_NOT_READY } from "../../relay/endpoint.ts";
 import type { BlanketChrome } from "./chrome.ts";
 import type { BlanketTemplate } from "./template.ts";
@@ -435,6 +435,11 @@ export class BlanketPart implements ServicePart {
     const chrome = this.o.chrome;
     const why = await unit().catch((e) => (e as Error).message);
     if (!still()) return null;
+    if (why === FAIL_HOLD_TEXT) {
+      this.stateNow = "stopped";
+      this.o.log("blanket: a use of the blanket scope in the hold-off after a fail-closed stop starts no blanket Chrome");
+      return why;
+    }
     if (why !== null) { this.stateNow = "failed"; this.failure = why; return why; }
     // The start runs in the queue, and only while the scope still holds the blanket Chrome: an end that the scope's end
     // or a new holder asked for runs before it (no start then) or after it (it stops what the start made).
