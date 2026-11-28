@@ -32,8 +32,9 @@ export const COOKIE_RECORD = "sign-in-cookies.json";
 export const CHECK_DELAY_MS = 60_000;
 /**
  * The most domains that the record keeps: over it the oldest entry whose first count ran and that has no open item goes.
- * An entry with an open item of `cookie_loss` stays until the next import of its domain (C12), so with more such entries
- * the record holds more.
+ * An entry with an open item of `cookie_loss` stays until the next import of its domain (C12), and an entry whose first
+ * count has not run stays too (board ab-2pz), so the record has no fixed limit: while every check skips (no cookie file,
+ * no node:sqlite, a journal that is not empty), each import adds an entry that stays.
  */
 export const MAX_DOMAINS = 200;
 

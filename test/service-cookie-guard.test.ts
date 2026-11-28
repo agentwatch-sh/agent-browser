@@ -262,7 +262,6 @@ test("board ab-2pz: over MAX_DOMAINS an import whose first count has not run sta
     for (let i = 0; i < MAX_DOMAINS - 1; i++) counts.set(name(i), 0);
     g.guard.check();
     assert.equal(g.guard.losses().length, MAX_DOMAINS - 1, "an open item at each older entry");
-    // Two imports before any check: the first one's count has not run, so it stays.
     g.guard.imported("first.example", 1);
     g.guard.imported("second.example", 1);
     let kept = g.guard.domains().map((e) => e.domain);
