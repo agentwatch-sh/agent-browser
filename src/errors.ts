@@ -30,7 +30,7 @@ export class NotAllowedError extends AgentBrowserError {
   readonly host: string;
   /** The refused URL is about:blank: a redirect refusal says that the tab stays on a blank page (redirectError). */
   readonly blank: boolean;
-  /** The refused URL is Chrome's error page of a failed load (chrome-error:): redirectError says that the load failed. */
+  /** Board ab-9au. */
   readonly errorPage: boolean;
   constructor(url: string, message = `refusing: ${safeHost(url)} is not on the allowlist`) {
     super("not_allowed", message);

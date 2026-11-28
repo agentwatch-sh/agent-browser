@@ -126,7 +126,7 @@ const PAGES: Record<string, PageSpec> = {
   }) },
   // Only a subframe goes off the list, then the tab goes to about:blank.
   "/frame-only": { title: "frame only", onload: (p) => p.later(0, () => { p.fake.subframeNavigates(p, "SUB-1", `https://${SUBFRAME}/frame`); guardBlanks(p); }) },
-  // A redirect off the list, then the tab shows a listed URL with no host: the refusal comes before any frame-tree read.
+  // The refusal comes before any frame-tree read.
   "/data": { title: "data", onload: (p) => p.later(0, () => { scriptGoesTo(p, `https://${BLOCKED}/page`); p.listedUrl = "data:text/html,x"; }) },
   "/ip": { title: "ip", onload: (p) => p.later(0, () => scriptGoesTo(p, "http://10.0.0.1:8080/page?code=SECRET-CODE")) },
   "/local": { title: "local", onload: (p) => p.later(0, () => scriptGoesTo(p, "http://localhost:3000/page?code=SECRET-CODE")) },

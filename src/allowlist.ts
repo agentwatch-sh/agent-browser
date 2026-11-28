@@ -62,7 +62,7 @@ export function guardCovers(host: string, allow: readonly string[]): boolean {
   return guardMatcher(allow)(host);
 }
 
-/** guardCovers with the list read once: the entries are filtered here, not at each host. */
+/** Board ab-9au. */
 export function guardMatcher(allow: readonly string[]): (host: string) => boolean {
   const entries = allow.filter((d) => d === ANY_HOST || normalizeEntry(d) === d);
   return (host) => covers(entries, host);

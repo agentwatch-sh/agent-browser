@@ -797,8 +797,8 @@ export class Tab {
   }
 
   /**
-   * Limit: a refusal that comes before the connection's first frame-tree read (a listed URL off the list with no host,
-   * or the pinned window) has no main frame id yet, so it gets the plain words (board ab-81e).
+   * Limit: when Page.navigate itself is refused, the tab has no main frame id yet, so the refusal gets the plain words
+   * (boards ab-81e, ab-9au).
    */
   blockedHost(): string | undefined {
     return this.mainFrameId === undefined ? undefined : this.navigationsOff.get(this.mainFrameId);
