@@ -226,7 +226,8 @@ test("the taskport right: its fields (no comment, no date) and what they mean fo
   assert.equal(form("<key>class</key><string>user</string><key>group</key><string>_developer</string><key>authenticate-user</key><false/>"), "a group member with no password");
   assert.equal(form("<key>class</key><string>user</string><key>authenticate-user</key><true/><key>shared</key><false/>"), "a password at each request");
   assert.equal(form("<key>class</key><string>user</string><key>authenticate-user</key><true/><key>shared</key><true/>"), "a password once, shared with no timeout");
-  assert.equal(form("<key>class</key><string>user</string><key>shared</key><true/><key>timeout</key><integer>0</integer>"), "a password at each request");
+  assert.equal(form("<key>class</key><string>user</string><key>authenticate-user</key><true/><key>shared</key><true/><key>timeout</key><integer>0</integer>"), "a password at each request");
+  assert.equal(form("<key>class</key><string>user</string><key>shared</key><true/><key>timeout</key><integer>36000</integer>"), "another form", "no authenticate-user key (board ab-v16.97.17)");
   assert.equal(form("<key>class</key><string>evaluate-mechanisms</string>"), "another form");
   assert.equal(form("<key>k</key><string>v</string>"), "unknown");
   const other = parseTaskport(run(`<plist version="1.0"><dict><key>class</key><string>user</string><key>group</key><string>somebody</string><key>rule</key><array><string>my-rule</string></array></dict></plist>`));
