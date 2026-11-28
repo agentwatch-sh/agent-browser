@@ -423,10 +423,10 @@ export class ChromeUnit {
    * it (review C1). A take that a later start covers (the op `start`, or a request's start, that began after the take)
    * or that a stop follows (the op `stop`, `enabled: false`, a stop by use or of the fail-closed watch) is no end for a
    * wait. A start that fails starts nothing, so it covers no take (board ab-w6i): the waiting request makes its one
-   * start at a use (its rules apply). A start that took the end itself began before its take, so the start count does
-   * not cover that take: when the start fails, the take stays the latest event; when it runs Chrome, the wait waits on
-   * that Chrome, the stop of that Chrome covers the take (the stop count), and an end of that Chrome is a take of its
-   * own.
+   * start at a use (C12: the hold and one start_failed when it fails). A start that took the end itself began before
+   * its take, so the start count does not cover that take: when the start fails, the take stays the latest event; when
+   * it runs Chrome, the wait waits on that Chrome, the stop of that Chrome covers the take (the stop count), and an end
+   * of that Chrome is a take of its own.
    */
   endedSince(mark: number): boolean {
     return this.ends > mark && this.stops === this.endAt.stops && this.starts === this.endAt.starts;
@@ -989,8 +989,8 @@ export class ChromeUnit {
 
   /**
    * Bring the unit up; true when it started anything. The caller holds the lock. The Mac (board ab-w6i): a start that
-   * fails covers no take (endedSince), so its count goes back, unless it took an end itself (that take's endAt.starts
-   * holds this start).
+   * fails covers no take (endedSince), so its count goes back, unless an end was taken during the start (that take's
+   * endAt.starts holds this start).
    */
   private async startLocked(fetch: boolean): Promise<boolean> {
     this.starts++;

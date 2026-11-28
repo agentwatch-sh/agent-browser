@@ -1257,6 +1257,8 @@ test("board ab-smr (the review of ab-w6i, Minor 3): on the Mac a request that wa
       assert.equal(w.logs.filter((l) => l.startsWith("unit: the start at an agent's use failed:")).length, 1);
       assert.deepEqual(endSeq(x, mark), ["stopped idle", "stopped start_failed"], `one stopped idle, then one start_failed (${taker})`);
       assert.deepEqual((x.part as any).useFail, { at: w.now, text: "Google Chrome could not start: open exited with 1" }, `the hold of a failed start at a use (${taker})`);
+      assert.equal(await x.part.wake(ready), "The agent browser could not get ready: Google Chrome could not start: open exited with 1.", `in the hold a request gets the same text at once (${taker})`);
+      assert.equal(x.calls.length, 3, `with no new start (${taker})`);
       assert.equal(x.part.unit.running(), false);
     } finally { w.close(); }
   }
