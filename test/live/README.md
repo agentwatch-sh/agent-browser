@@ -805,7 +805,7 @@ on. `test/live/sign-in-act/` cannot run on the Mac: it needs Xvfb, a test displa
 
 The harness serves a local login site and records what the site sees. It never starts a Chrome, never runs
 `agentwatch`, and opens no site: the seat runs the act and opens the seat page itself. The site is
-`http://login.localhost:48731` (`--port` gives another port), and its server listens on 127.0.0.1 only. It answers
+`http://login.localhost:<port>`, where the port is a free one that `serve` picks and prints (`--port` gives a fixed port), and its server listens on 127.0.0.1 only. It answers
 the site only for the Host `login.localhost:<port>`, and the check's stop only for a `POST /harness/stop` with the Host
 `127.0.0.1:<port>` (204 with the run's token, 403 without it); every other Host gets 421. Its pages:
 
@@ -822,8 +822,8 @@ the site only for the Host `login.localhost:<port>`, and the check's stop only f
 The test username and password are made up and new for each run (`test-user-` and 12 hex digits, `test-pass-` and 16
 letters and digits: no Shift key, so the act types each character as one key). The run's folder (0700, in the
 system's temp folder) holds them in `run.json` (0600) for `check`, and `site.json` holds what the site saw (flags and
-counts only). `run.json` also keeps the two log files that `serve` gets, and the service log's size and inode at the
-start. The folder goes when the check stops the server, at the time limit (30 minutes, `--minutes` up to 120), and at
+counts only). `run.json` also keeps the two log files that `serve` gets, and the service log's size, inode and a hash of its first
+bytes (at most 4096) at the start. The folder goes when the check stops the server, at the time limit (30 minutes, `--minutes` up to 120), and at
 SIGTERM, SIGINT or SIGHUP.
 
 The run, in order:
@@ -840,7 +840,7 @@ The run, in order:
    ```
 
 2. The operator, in the Browser pane: adds the scope's list entry `login.localhost`, and adds one stored sign-in with
-   the printed values: Name `mac-live-test`, Origin of the site `http://login.localhost:48731`, Sign-in path `/login`,
+   the printed values: Name `mac-live-test`, Origin of the site (the printed `origin`), Sign-in path `/login`,
    the printed Username and Password (and the password again), no more origins. The store is unlocked.
 3. The seat runs the act once, and keeps its output and exit in the run's folder:
 
@@ -848,7 +848,7 @@ The run, in order:
    agentwatch browser sign-in mac-live-test > <folder>/answer.txt 2>&1; echo $? > <folder>/answer.exit
    ```
 
-   Then the seat opens `http://login.localhost:48731/seat` in its own agent browser tab, and asks the operator two
+   Then the seat opens the printed `origin` with `/seat` in its own agent browser tab, and asks the operator two
    questions: "Did a window show on the screen during the sign-in?" and "Did the front app change?". The seat gives
    each answer as `yes`, `no` or `unsure`, from the operator's words, and runs the check:
 
@@ -874,11 +874,15 @@ How to read the result:
   - `seatTab`: a `/seat` after the sign-in loaded signed in (the move of C11).
   - `scan`: no form of a test value (the act's five forms, also after a percent-decoding of each `%XX`) is in the
     answer, in the service log or in the sign-in log, and the scan's twin finds a planted value. Of the service log the
-    check reads only the part after the server's start (the whole file when its inode changed or it got shorter: a
-    rotation); the sign-in log it reads whole (agentwatch writes it whole). Not measured: a log that could not be read,
-    more than 64 MiB to read, and a log that names neither `mac-live-test` nor this run's origin (a wrong file or an
-    empty one: the service's act line and agentwatch's sign-in log name both). The sign-in log is not tied to this
-    run: a sign-in log of an earlier run on the same port passes this control (board ab-v16.97.20).
+    check reads only the part after the server's start. It reads the whole file when its inode changed, when it got
+    shorter, and when its first bytes differ from those at the start (a copytruncate that regrew past the old size); the
+    sign-in log it reads whole (agentwatch writes it whole). Not measured: a log that could not be read, more than 64
+    MiB to read, and a log that does not name this run's origin, as the printed `origin` followed by no digit (a wrong
+    file, an empty one, or the log of an earlier run: the service's act line and agentwatch's sign-in log name the
+    origin). The port is free when `serve` starts, so a log of an earlier run names another origin unless the same
+    port came again or `--port` fixed it. Stated limit: after a rotation, the lines of this run that went into the
+    rotated file are not read. The percent-decoding is right for ASCII values only: a run's test value that is not
+    ASCII fails the scan, and `check` refuses a `run.json` that holds one (exit 2).
   - `front`: the operator's answer: `no` holds, `yes` fails.
 - `page`: the record's numbers: `vis`, `focus` and `submitTrusted` at the submit; `keys`, `keysUp`, `inputs`,
   `pointer`, `untrusted`; `keysVisible` and `keysHidden`, `keysFocus` and `keysNoFocus` (each key's state);

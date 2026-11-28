@@ -13,8 +13,8 @@ import { tempDir, done } from "./temp-dirs.ts";
 import {
   ACT_MS_MIN, ANSWER_FILE, CHECK_NAMES, CREDENTIAL_NAME, DEFAULT_PORT, EXIT_FILE, HOST, LOGIN_PATH, RECORD_FIELD, RECORDER_JS, RUN_FILE, SEAT_PATH, SESSION_COOKIE,
   SITE_FILE, STOP_HEADER, STOP_PATH,
-  answerCheck, applyEvent, checkResult, eventLine, frontCheck, holdsValue, loginPage, newSiteState, originOf, pageCheck, parseArgs, parseRecord, postCheck,
-  resultOf, scanCheck, seatCheck, setupText, siteAnswer, testValues, valueForms,
+  answerCheck, applyEvent, checkResult, eventLine, frontCheck, holdsValue, isAscii, loginPage, namesOrigin, newSiteState, originOf, pageCheck, parseArgs, parseRecord, postCheck,
+  resultOf, scanCheck, scanFrom, seatCheck, setupText, siteAnswer, testValues, valueForms,
   type Check, type PageRecord, type Result, type ScanText, type SiteState, type TestValues,
 } from "./live/sign-in-act-mac/parts.ts";
 
@@ -44,7 +44,7 @@ test("the scan: each test value in the act's five forms, also inside a percent-e
   }
   assert.ok(holdsValue(`u=${encodeURIComponent(V.user).replace(/-/g, "%2D")}`, V), "after a percent-decoding");
   assert.ok(!holdsValue(`${V.pass.slice(0, -1)} ${V.user.slice(1)}`, V), "a part of a value is no value");
-  assert.ok(holdsValue(`100% done; u=${encodeURIComponent(V.user).replace(/-/g, "%2D")}; 5%`, V), "a stray % does not stop the decode (the review's M3)");
+  assert.ok(holdsValue(`100% done; u=${encodeURIComponent(V.user).replace(/-/g, "%2D")}; 5%`, V), "a stray % does not stop the decode");
   for (const x of [V.user, V.pass]) for (const f of [x, Buffer.from(x).toString("base64").replace(/=+$/, ""), Buffer.from(x).toString("base64url")]) assert.ok(valueForms(V).includes(f), f);
 });
 
@@ -238,12 +238,39 @@ test("the scan: a test value in the answer or in a log fails; both logs must be 
   assert.equal(scanCheck(LOGS(null, null, "ENOENT"), V, ORIGIN).why, "not measured: the service log (ENOENT), the sign-in log (ENOENT)");
   assert.equal(scanCheck([ANS, { kind: "the service log", text: ACT_LINE }], V, ORIGIN).why, "not measured: the sign-in log: not given");
   assert.equal(scanCheck([ANS], V, ORIGIN).why, "not measured: the service log, the sign-in log: not given");
-  // The review's I2: a wrong file, an empty one or a rotated one names neither the credential nor this run's origin.
-  assert.equal(scanCheck(LOGS("", ring), V, ORIGIN).why, "not measured: the service log names neither the credential nor this run's origin");
+  assert.equal(scanCheck(LOGS("", ring), V, ORIGIN).why, "not measured: the service log does not name this run's origin");
   assert.equal(scanCheck(LOGS(ACT_LINE.replace(`${CREDENTIAL_NAME}, origin ${ORIGIN}`, "c-1, origin http://login.localhost:1"), "{}"), V, ORIGIN).why,
-    "not measured: the service log, the sign-in log names neither the credential nor this run's origin");
-  assert.equal(scanCheck(LOGS(`origin ${ORIGIN}`, CREDENTIAL_NAME), V, ORIGIN).ok, true, "the name or the origin is enough");
+    "not measured: the service log, the sign-in log does not name this run's origin");
+  const earlier = JSON.stringify({ acts: [{ name: CREDENTIAL_NAME, origin: originOf(RUN.port + 1) }] });
+  assert.equal(scanCheck(LOGS(ACT_LINE, earlier), V, ORIGIN).why, "not measured: the sign-in log does not name this run's origin", "an earlier run's log with the same credential name does not pass");
+  assert.equal(scanCheck(LOGS(`origin ${ORIGIN}`, `origin ${ORIGIN}`), V, ORIGIN).ok, true);
   assert.equal(scanCheck(LOGS(ACT_LINE, ring), { user: "", pass: "" }, ORIGIN).why, "the scan's twin finds no planted value");
+});
+
+test("namesOrigin: the origin ends at a non-digit, so an earlier run's longer port does not pass", () => {
+  assert.equal(namesOrigin(`a ${originOf(1234)}5 b`, originOf(1234)), false);
+  assert.equal(namesOrigin(`a ${originOf(1234)}5 b ${originOf(1234)}`, originOf(1234)), true);
+  assert.equal(namesOrigin(`${originOf(1234)}`, originOf(1234)), true);
+  assert.equal(namesOrigin("", originOf(1234)), false);
+});
+
+test("scanFrom: the part after serve's start only for the same file that only grew; a truncation that regrew, a rotation or a shorter file reads whole", () => {
+  const mark = { ino: "7", size: 30, headLen: 30, head: "h1" };
+  const at = (o: Partial<{ ino: string; size: number; head: string | null }>) => scanFrom(mark, { ino: o.ino ?? "7", size: o.size ?? 90, headOf: () => (o.head === undefined ? "h1" : o.head) });
+  assert.equal(at({}), 30);
+  assert.equal(at({ head: "h2" }), 0, "the same inode with other first bytes: a copytruncate");
+  assert.equal(at({ head: null }), 0);
+  assert.equal(at({ ino: "8" }), 0);
+  assert.equal(at({ size: 29 }), 0);
+  assert.equal(scanFrom({ ino: null, size: 0, headLen: 0, head: null }, { ino: "7", size: 5, headOf: () => null }), 0, "no file at the start");
+  assert.equal(scanFrom({ ino: "7", size: 0, headLen: 0, head: null }, { ino: "7", size: 5, headOf: () => null }), 0, "an empty file at the start");
+});
+
+test("the test values must be ASCII: the scan fails on another value", () => {
+  assert.ok(isAscii(V.user + V.pass));
+  assert.equal(isAscii("caf\u00e9"), false);
+  const bad = { user: "test-user-caf\u00e9", pass: V.pass };
+  assert.deepEqual(scanCheck(LOGS(ACT_LINE, "{}"), bad, ORIGIN), { ok: false, why: "a test value is not ASCII" });
 });
 
 test("the operator's front answer: no holds, yes fails, unsure or no answer is not measured", () => {
@@ -387,7 +414,7 @@ test("the harness on loopback: serve prints its run and the operator's text, the
     assert.deepEqual(JSON.parse(kept.stdout).checks.scan, { ok: null, why: "not measured: the sign-in log (ENOENT)" });
     writeFileSync(signInLog, JSON.stringify({ acts: [{ name: CREDENTIAL_NAME, origin: s.head.origin, result: "signed_in" }] }));
     const old = await check(env, ["--folder", s.head.folder, "--window", "yes", "--front-changed", "no", "--keep"]);
-    assert.deepEqual(JSON.parse(old.stdout).checks.scan, { ok: null, why: "not measured: the service log names neither the credential nor this run's origin" }, "only the part after serve's start");
+    assert.deepEqual(JSON.parse(old.stdout).checks.scan, { ok: null, why: "not measured: the service log does not name this run's origin" }, "only the part after serve's start");
     appendFileSync(serviceLog, actLine(s.head.origin));
     const r = await check(env, ["--folder", s.head.folder, "--window", "yes", "--front-changed", "no"]);
     assert.equal(r.code, 0, r.stdout + r.stderr);
@@ -414,6 +441,11 @@ test("the harness on loopback: a test value in a log fails check (exit 1), a rot
     await act(s, { user: run.user, pass: run.pass });
     writeFileSync(join(s.head.folder, ANSWER_FILE), `${signedInText(s.head.origin)}\n`);
     writeFileSync(join(s.head.folder, EXIT_FILE), "0\n");
+    writeFileSync(signInLog, JSON.stringify({ acts: [{ name: CREDENTIAL_NAME, origin: s.head.origin }] }));
+    // A copytruncate: the same file, cut to zero, regrown past its size at serve's start, with this run's origin in the part that the old size would skip.
+    writeFileSync(serviceLog, `origin ${s.head.origin}\n${"x".repeat(80)}\n`);
+    const cut = await check(env, ["--folder", s.head.folder, "--window", "unsure", "--front-changed", "no", "--keep"]);
+    assert.deepEqual(JSON.parse(cut.stdout).checks.scan, { ok: true, why: null }, "a regrown copytruncate is read whole");
     writeFileSync(signInLog, JSON.stringify({ acts: [{ name: CREDENTIAL_NAME, origin: s.head.origin, x: Buffer.from(run.pass).toString("base64url") }] }));
     // A rotation: a new file at the same path.
     writeFileSync(join(tmp, "rotated.log"), actLine(s.head.origin).slice(0, 10));
@@ -424,11 +456,15 @@ test("the harness on loopback: a test value in a log fails check (exit 1), a rot
     const j = JSON.parse(r.stdout);
     assert.deepEqual([j.ok, j.checks.scan], [false, { ok: false, why: "a test value is in the sign-in log" }]);
     assert.ok(!r.stdout.includes(run.pass), "the result names the text, never the value");
-    writeFileSync(signInLog, JSON.stringify({ acts: [{ name: CREDENTIAL_NAME }] }));
+    writeFileSync(signInLog, JSON.stringify({ acts: [{ name: CREDENTIAL_NAME, origin: s.head.origin }] }));
     const rotated = await check(env, ["--folder", s.head.folder, "--window", "unsure", "--front-changed", "no", "--keep"]);
     assert.deepEqual(JSON.parse(rotated.stdout).checks.scan, { ok: true, why: null }, "the rotated log is read whole");
     assert.ok(existsSync(s.head.folder), "--keep: serve still runs");
     const runText = readFileSync(join(s.head.folder, RUN_FILE), "utf8");
+    writeFileSync(join(s.head.folder, RUN_FILE), runText.slice(0, -3));
+    writeFileSync(join(s.head.folder, RUN_FILE), JSON.stringify({ ...JSON.parse(runText), user: "test-user-caf\u00e9" }));
+    const nonAscii = await check(env, ["--folder", s.head.folder]);
+    assert.deepEqual([nonAscii.code, nonAscii.stdout], [2, ""], "a test value that is not ASCII: no run of the harness");
     writeFileSync(join(s.head.folder, RUN_FILE), runText.slice(0, -3));
     const damaged = await check(env, ["--folder", s.head.folder]);
     assert.deepEqual([damaged.code, damaged.stdout, damaged.stderr], [2, "", "sign-in-act-mac: the folder holds no run of the harness\n"], "a fixed text: never a part of run.json");

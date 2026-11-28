@@ -218,7 +218,7 @@ export function taskportMeaning(x: { class: string | null; rule: string[] | null
   if (x.class === "rule") return x.rule && x.rule.length === 1 && x.rule[0] === "allow" ? "allow: no password" : "a rule";
   if (x.class !== "user") return "another form";
   if (x.authenticateUser === false) return "a group member with no password";
-  // Board ab-v16.97.15 (the review's M2) and board ab-v16.97.17: none was measured; authd's defaults are not read here.
+  // Boards ab-v16.97.15 (M2) and ab-v16.97.17.
   if (x.authenticateUser === null || x.shared === null || (x.timeout !== null && x.timeout < 0)) return "another form";
   if (x.shared === true) return x.timeout === null ? "a password once, shared with no timeout" : x.timeout > 0 ? "a password once, shared for its timeout" : "a password at each request";
   return "a password at each request";

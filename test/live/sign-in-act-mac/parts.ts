@@ -8,7 +8,7 @@ export const HARNESS = "sign-in-act-mac";
 export const VERSION = 1;
 export const CREDENTIAL_NAME = "mac-live-test";
 export const HOST = "login.localhost";
-export const DEFAULT_PORT = 48731;
+export const DEFAULT_PORT = 0;
 export const LOGIN_PATH = "/login";
 export const HOME_PATH = "/home";
 export const SEAT_PATH = "/seat";
@@ -43,7 +43,8 @@ export function testValues(random: (n: number) => Uint8Array): TestValues {
 
 export const valueForms = (v: TestValues): string[] => [...new Set([...passwordForms(v.user), ...passwordForms(v.pass)])];
 
-// The test values are ASCII, so each %XX decodes by itself; a stray "%" elsewhere in a log cannot stop the decode.
+export const isAscii = (s: string) => /^[\x00-\x7f]*$/.test(s);
+
 export function holdsValue(text: string, v: TestValues): boolean {
   const forms = valueForms(v);
   if (forms.some((f) => text.includes(f))) return true;
@@ -129,7 +130,6 @@ export function siteAnswer(r: SiteRequest, run: { port: number; token: string; v
   return { status: 404, headers: {}, body: "", event: null };
 }
 
-// site.json holds no test value: only flags, counts and the page's records.
 export type SiteState = { pages: number; posts: { at: number; user: boolean; pass: boolean; record: PageRecord | null; session: boolean }[]; homes: { at: number; signedIn: boolean }[]; seats: { at: number; signedIn: boolean }[]; wrongHost: number };
 export const newSiteState = (): SiteState => ({ pages: 0, posts: [], homes: [], seats: [], wrongHost: 0 });
 
@@ -180,8 +180,7 @@ export function parseRecord(text: string): PageRecord | null {
 
 // ------------------------------------------------------------------ the checks of step 3
 
-// `ok` null is "not measured", never a pass. `why` holds fixed words and numbers only, never a value or a path:
-// checkResult refuses each "/", so no `why` names a URL path.
+// A `why` never holds a "/": checkResult refuses the whole result.
 export type Check = { ok: boolean | null; why: string | null };
 const pass: Check = { ok: true, why: null };
 const fail = (why: string): Check => ({ ok: false, why });
@@ -233,14 +232,25 @@ export function seatCheck(s: SiteState): Check {
   return after.some((x) => x.signedIn) ? pass : fail("the seat page did not load signed in");
 }
 
+export const namesOrigin = (text: string, origin: string): boolean => {
+  for (let i = text.indexOf(origin); i >= 0; i = text.indexOf(origin, i + 1)) if (!/[0-9]/.test(text[i + origin.length] ?? "")) return true;
+  return false;
+};
+
+export type LogMark = { ino: string | null; size: number; headLen: number; head: string | null };
+export const HEAD_MAX = 4096;
+
+export function scanFrom(mark: LogMark, now: { ino: string; size: number; headOf: (len: number) => string | null }): number {
+  if (mark.ino === null || mark.ino !== now.ino || now.size < mark.size) return 0;
+  return mark.headLen === 0 || now.headOf(mark.headLen) === mark.head ? mark.size : 0;
+}
+
 export const SCAN_KINDS = ["the service log", "the sign-in log"] as const;
 export type ScanKind = (typeof SCAN_KINDS)[number];
 export type ScanText = { kind: "the answer" | ScanKind; text: string | null; why?: string };
 
-// The service's act line names the credential and its origin (src/service/signins/act.ts, the end's log line), and
-// agentwatch's sign-in log keeps both for each act: a log text without either is not this run's (a wrong file, an empty
-// one, a rotated one).
 export function scanCheck(texts: ScanText[], v: TestValues, origin: string): Check {
+  if (!isAscii(v.user + v.pass)) return fail("a test value is not ASCII");
   if (!holdsValue(`x${Buffer.from(v.pass).toString("base64url")}x`, v) || !holdsValue(`u=${encodeURIComponent(v.user)}`, v)) return fail("the scan's twin finds no planted value");
   const holding = texts.filter((t) => t.text !== null && holdsValue(t.text, v)).map((t) => t.kind);
   if (holding.length) return fail(`a test value is in ${holding.join(", ")}`);
@@ -248,8 +258,8 @@ export function scanCheck(texts: ScanText[], v: TestValues, origin: string): Che
   if (missing.length) return notMeasured(`${missing.join(", ")}: not given`);
   const unread = texts.filter((t) => t.text === null).map((t) => `${t.kind} (${t.why ?? "not read"})`);
   if (unread.length) return notMeasured(unread.join(", "));
-  const foreign = texts.filter((t) => t.kind !== "the answer" && !t.text!.includes(CREDENTIAL_NAME) && !t.text!.includes(origin)).map((t) => t.kind);
-  if (foreign.length) return notMeasured(`${foreign.join(", ")} names neither the credential nor this run's origin`);
+  const foreign = texts.filter((t) => t.kind !== "the answer" && !namesOrigin(t.text!, origin)).map((t) => t.kind);
+  if (foreign.length) return notMeasured(`${foreign.join(", ")} does not name this run's origin`);
   return pass;
 }
 
