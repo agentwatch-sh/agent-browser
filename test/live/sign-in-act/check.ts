@@ -39,8 +39,7 @@
 //      target and no window of the act. The agent's main-world listeners keep a page log that Runtime.evaluate reads
 //      while their tab lives (the relay refuses a binding in the main world), the worker reports each fetch of the sign-in
 //      path to the check's server (the move's import clears Cache Storage), and a twin marker during the act shows that
-//      each page log reports a message then, and a fetch of the worker's path shows that its report works then (board ab-v16.97.13, H1 and H2); the window search
-//      has tab A's own window as a positive control (board ab-v16.97.16);
+//      each page log reports a message then (board ab-v16.97.13, H1 and H2; ab-v16.97.16);
 //   D3: each refusal of section 7.9 that the local site can make, with C11's exact text and result; r-busy on a second
 //      live-1 connection while r-slow runs, after a set_sessions with live-1 only (step 7b's remote stand-in, a child of
 //      this process, made this process an ancestor root at the relay's last read of the roots; board ab-v16.97.13, H3);
@@ -462,6 +461,7 @@ try {
     const evs: { m: string; at: number; out: string }[] = [];
     const record = (what: string, out: unknown) => { const s = typeof out === "string" ? out : JSON.stringify(out) ?? "undefined"; seen.push(s); reads.push({ what, at: Date.now(), out: s }); return s; };
     const offs: (() => void)[] = [];
+    stops.push(async () => { for (const off of offs) off(); });
     for (const m of ["DOM.attributeModified", "DOM.setChildNodes", "DOM.childNodeInserted", "DOM.characterDataModified", "Network.requestWillBeSent", "Network.responseReceived",
       "Network.webSocketCreated", "Fetch.requestPaused", "Runtime.bindingCalled", "Runtime.consoleAPICalled", "Page.frameNavigated", "Page.windowOpen"]) {
       offs.push(c.on(m, (p, sid) => {
@@ -553,6 +553,7 @@ try {
 
     // During the act: the reads on A, B and C, the browser's targets and contexts, and the window search.
     const own = new Set(((await c.send("Target.getTargets")).targetInfos as any[]).map((t) => t.targetId));
+    stops.push(async () => { await c.send("Target.setAutoAttach", { autoAttach: false, waitForDebuggerOnStart: false, flatten: true }).catch(() => {}); });
     await c.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }).catch((e: Error) => record("Target.setAutoAttach", `error: ${e.message}`));
     const readJs = `JSON.stringify({ values: [...document.querySelectorAll("input")].map((i) => i.value), attrs: [...document.querySelectorAll("input")].map((i) => i.getAttribute("value")),
       local: Object.entries(localStorage), session: Object.entries(sessionStorage), iso: document.documentElement.dataset.awIso || "",
@@ -584,9 +585,8 @@ try {
     stops.push(async () => { going = false; await loop; });
     // The twins of the page logs during the act (board ab-v16.97.13, H1): once the act's start event came, tab A gets an
     // input event of a marker on a field of its own (its main-world listener; the page's own fields and their sends stay
-    // still), and tab C types the marker (BroadcastChannel and the storage event to B) and fetches the sign-in path with the marker as its query (the
-    // worker's report and its message to B; H2's control during the act). So each page log shows that it
-    // reports a message during the act, and the checks below can fail on one that is not the twin's.
+    // still), and tab C types the marker (BroadcastChannel and the storage event to B). So each page log shows that it
+    // reports a message during the act, and the checks below can fail on one that is not the twin's (H2: board ab-v16.97.16).
     const TWIN = "aw-twin-during-the-act";
     const TWIN_B = [`bc:${TWIN}`, `storage:aw-k1-typed=${TWIN}`, `sw-msg:sw:/login?${TWIN}`];
     const READ_END_MS = 10_000;
@@ -617,14 +617,14 @@ try {
     verify("D2: no event of the agent's sessions got a test value (DOM.attributeModified, Network.requestWillBeSent, Fetch.requestPaused, Runtime.consoleAPICalled, Page.windowOpen)", !evs.some((e) => holds(e.out)), `${evs.length} events`);
     const inA = tailA.got.filter((k) => k.at >= from);
     verify("D2: tab A's main-world listener (its page log) got the twin's input during the act and no other input: the act typed nothing into the agent's own tab of the sign-in page",
-      inA.some((k) => k.s === `input:${TWIN}`) && inA.every((k) => k.s === `input:${TWIN}`) && !tailA.got.some((k) => holds(k.s)) && tailA.lastAnswer() >= to - READ_END_MS,
+      inA.some((k) => k.s === `input:${TWIN}`) && inA.every((k) => k.s === `input:${TWIN}`) && !tailA.got.some((k) => holds(k.s)) && tailA.lastAnswer() >= Math.max(from, to - READ_END_MS),
       `twin: ${twinSent}; last answered read ${((tailA.lastAnswer() - to) / 1000).toFixed(1)} s from the act's end; ${JSON.stringify(tailA.got.map((k) => [k.at - from, shown(k.s)]))}`);
     verify("D2: the agent's Network and Fetch saw no post of the sign-in (the act's submit)", !evs.some((e) => /^(Network\.requestWillBeSent|Fetch\.requestPaused)$/.test(e.m) && /"method":"POST"/.test(e.out)),
       `${evs.filter((e) => e.m === "Fetch.requestPaused").length} paused requests of its own tabs`);
     const inB = tailB.got.filter((k) => k.at >= from);
     verify("D2 K1: the listener tab (its page log) got the twin's broadcast, storage event and worker message during the act, and no other broadcast, storage event or worker message, and no test value",
       inB.some((k) => k.s === `bc:${TWIN}`) && inB.some((k) => k.s === `storage:aw-k1-typed=${TWIN}`) && inB.some((k) => k.s === `sw-msg:sw:/login?${TWIN}`)
-      && !inB.some((k) => /^(bc|sw-msg|storage):/.test(k.s) && !TWIN_B.includes(k.s)) && !tailB.got.some((k) => holds(k.s)) && tailB.lastAnswer() >= to - READ_END_MS,
+      && !inB.some((k) => /^(bc|sw-msg|storage):/.test(k.s) && !TWIN_B.includes(k.s)) && !tailB.got.some((k) => holds(k.s)) && tailB.lastAnswer() >= Math.max(from, to - READ_END_MS),
       `twin: ${twinSent}; last answered read ${((tailB.lastAnswer() - to) / 1000).toFixed(1)} s from the act's end; ${JSON.stringify(inB.map((k) => [k.at - from, shown(k.s)]))}`);
     const idsDuring = during.filter((r) => r.what === "Target.getTargets" && !r.out.startsWith("error")).flatMap((r) => (JSON.parse(r.out).targetInfos as any[]).map((t) => t.targetId));
     const tgtDuring = events.slice(tgt0, tgt1).map((e) => JSON.parse(e).p?.targetInfo?.targetId).filter((x) => typeof x === "string");
@@ -632,14 +632,15 @@ try {
       [...idsDuring, ...tgtDuring].every((id) => own.has(id)) && !events.slice(tgt0, tgt1).some((e) => /aw-act-/.test(e)), `${idsDuring.length} ids, ${tgtDuring.length} events; not own: ${[...new Set([...idsDuring, ...tgtDuring].filter((id) => !own.has(id)))].join(", ")}`);
     const winDuring = windows.filter((w) => w.at >= from && w.at <= to);
     log(`D2 NOTE: the window search's answers (the ids 1 to 12 and tab A's window ${winA}): ${windows.length}, ${winDuring.length} during the act: ${JSON.stringify(winDuring.slice(0, 4))}`);
-    verify("D2: the agent's window search found tab A's own window during the act (the positive control: Browser.getWindowForTarget of A gave its id, Browser.getWindowBounds of it answered with bounds)",
-      Number.isSafeInteger(winA) && winDuring.some((w) => w.id === winA && Number.isFinite(w.left) && Number.isFinite(w.width)), `window of A: ${winA}`);
-    verify("D2: the agent's window search found no window outside the screen (each window that answered during the act is on the 1280 x 900 screen)",
+    verify("D2: the agent's window search found tab A's own window during the act (Browser.getWindowForTarget of A gave its id, Browser.getWindowBounds of it answered with bounds); no other id from 1 to 12 answered",
+      Number.isSafeInteger(winA) && winDuring.some((w) => w.id === winA && Number.isFinite(w.left) && Number.isFinite(w.width)) && winDuring.every((w) => w.id === winA), `window of A: ${winA}; ids that answered: ${[...new Set(winDuring.map((w) => w.id))].join(", ")}`);
+    verify("D2: each window that the agent's search got an answer for during the act (tab A's, the ids 1 to 12) is on the 1280 x 900 screen; the act window's id is not known to the check, so its search is not shown",
       winDuring.every((w) => w.left < SCREEN[0] && w.top < SCREEN[1] && w.left + w.width > 0 && w.top + w.height > 0), JSON.stringify(winDuring.map((w) => [w.id, w.left, w.top, w.width, w.height])));
 
     // After the act: the move closed the agent's tabs of the site; a new tab E reads the origin's storage, Cache Storage
     // and its page, and the check reads the worker's log on its server; history.back() on a tab F of the sign-in page.
     const E = await open(`${ORIGIN}/home`);
+    stops.push(async () => { await c.send("Target.closeTarget", { targetId: E.targetId }).catch(() => {}); });
     for (const m of ["Runtime.enable", "DOM.enable", "Accessibility.enable"]) await c.send(m, {}, E.sessionId).catch(() => {});
     await text(E.sessionId);
     const store = await tryRead("E after: localStorage, sessionStorage and Cache Storage", () => ev(E.sessionId, `(async () => { const out = { local: Object.entries(localStorage), session: Object.entries(sessionStorage), caches: [] };
@@ -658,6 +659,7 @@ try {
       swLog.some((x) => x.at < from && x.url === "/login") && swFrom.length === 1 && swFrom[0].url === `/login?${TWIN}`, JSON.stringify(swLog.map((x) => [x.at - from, shown(x.url)])));
     record("E unregister the agent's worker", await ev(E.sessionId, `navigator.serviceWorker.getRegistrations().then((rs) => Promise.all(rs.map((r) => r.unregister()))).then((x) => x.length + " gone")`));
     const F = await open(`${ORIGIN}/login`);
+    stops.push(async () => { await c.send("Target.closeTarget", { targetId: F.targetId }).catch(() => {}); });
     await c.send("Runtime.enable", {}, F.sessionId).catch(() => {});
     const realPage = await titled(F.sessionId, "aw-live-sign-in-page");
     await c.send("Page.navigate", { url: `${ORIGIN}/home` }, F.sessionId).catch(() => {});
@@ -672,9 +674,6 @@ try {
     const path = (u: string) => { try { return new URL(u).pathname; } catch { return u; } };
     verify("D2 after the act: Target.getTargets holds no target of the act (no act page, no act window)", leftTargets.length > 0 && leftTargets.every((t) => !/aw-act-/.test(t.title ?? "") && (own.has(t.targetId) || [E.targetId, F.targetId].includes(t.targetId) || path(t.url) !== "/login")),
       leftTargets.map((t) => path(t.url)).join(", "));
-    for (const off of offs) off();
-    await c.send("Target.setAutoAttach", { autoAttach: false, waitForDebuggerOnStart: false, flatten: true }).catch(() => {});
-    for (const t of [E, F]) await c.send("Target.closeTarget", { targetId: t.targetId }).catch(() => {});
   })(); } finally { for (const stop of stops) await stop().catch(() => {}); }
   });
 
