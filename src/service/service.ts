@@ -664,7 +664,7 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     // neither by being open nor by its messages, and an open MCP session only by its tool calls; nothing of the service's
     // own (the model's bridge calls, the lists' pushes, a tab's events) counts. Only the main model's connections and the
     // tool calls of the scopes that use the main Chrome count (board ab-4wh.24): the blanket scope's connections, messages
-    // and tool calls never keep the main Chrome up (the blanket Chrome's own stop by use reads blanketTraffic, below).
+    // and tool calls never keep the main Chrome up.
     use: {
       now: () => {
         const n: string[] = [];
@@ -793,9 +793,12 @@ export async function startService(o: ServiceOptions): Promise<Service> {
     // The box's own names, read once: the "*" scope may not open them (C4's `exclude`).
     const names = boxNames();
     blanketPart = new BlanketPart({ chrome: blanketChrome, port: blanketPort, model: blanketModel, removeCopy: (scope) => lists.removeCopy(scope), log: o.log, exclude: () => names,
-      // The stop by use by the main Chrome's rule, with the blanket model's connections only: an agent's open connection,
-      // or the traffic of any of them (an MCP's own ticket connection counts only by its traffic).
-      ...(part ? { idle: { ms: () => part!.idleStopMs, use: () => { const u = (agent as (AgentDoor & { relay: Relay }) | null)?.relay.blanketTraffic(); return { inUse: !!u && (u.agents > 0 || u.busy > 0), quietFor: u?.quietFor ?? Infinity }; } } } : {}),
+      // C12, the use (board ab-4wh.28): an MCP's own ticket connection is no use here either; its Playwright sends commands
+      // of its own.
+      ...(part ? { idle: { ms: () => part!.idleStopMs, use: () => {
+        const u = (agent as (AgentDoor & { relay: Relay }) | null)?.relay.blanketTraffic(), m = mcp?.activity("blanket");
+        return { inUse: (!!u && (u.agents > 0 || u.busy > 0)) || (m?.calls ?? 0) > 0, quietFor: Math.min(u?.quietFor ?? Infinity, m?.quietFor ?? Infinity) };
+      } } } : {}),
       endMcp: (scope) => mcp?.endScopeSessions(scope),
       // The Mac (board ab-4wh.16): the template's op, feature, status key and sentences, and the version stop.
       ...(blanketTemplate ? { template: blanketTemplate, newerVersion: () => blanketNewer(blanketChrome, B!.profile) } : {}),

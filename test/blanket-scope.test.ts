@@ -330,7 +330,7 @@ test("the blanket model's parse agrees with the receiver 0.3.16's cases of \"*\"
   }
 });
 
-test("M3: the blanket model's own use counts an agent's open connection, and an MCP's own ticket connection only by its messages", { timeout: 30_000 }, async () => {
+test("M3, ab-4wh.28: an MCP's own ticket connection is no use of the blanket model, neither by being open nor by its messages (C12, the use)", { timeout: 30_000 }, async () => {
   const uid = process.getuid!();
   // Every peer is the service's own pid (the MCP inside the service), with a live ticket: its connections are the MCP's own.
   const reader = { form: "stat", peer: () => ({ pid: 2900, uid, pidfd: null, start: 5 }), proc: () => ({ ppid: 1, start: 5, state: "S" }), cgroup: () => null,
@@ -350,8 +350,11 @@ test("M3: the blanket model's own use counts an agent's open connection, and an 
     assert.equal(h.relay.blanketTraffic().agents, 0, "an open MCP connection is no use by itself");
     assert.equal(h.relay.blanketTraffic().quietFor, Infinity);
     await mcpConn.send("Browser.getVersion");
-    const t = h.relay.blanketTraffic();
-    assert.ok(t.quietFor < 5_000 && t.busy === 0, JSON.stringify(t));
+    assert.deepEqual(h.relay.blanketTraffic(), { agents: 0, busy: 0, quietFor: Infinity }, "its message is no use");
+    blanketFake.op = ({ op }) => (op === "windows.create" || op === "tabs.create" ? new Promise(() => {}) : undefined);
+    void mcpConn.send("Target.createTarget", { url: "https://news.example.org/" }).catch(() => {});
+    await until(() => blanketFake.sent("windows.create").length + blanketFake.sent("tabs.create").length > 0, "the held bridge call");
+    assert.deepEqual(h.relay.blanketTraffic(), { agents: 0, busy: 0, quietFor: Infinity }, "its message that runs is no use");
     // The main model's traffic is not the blanket model's.
     assert.equal(h.relay.traffic().agents, 0);
   } finally {

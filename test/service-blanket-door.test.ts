@@ -954,7 +954,7 @@ test("ab-4wh.24: the blanket scope's open connection and its client message that
   } finally { release(); await bl.close().catch(() => {}); await web?.close().catch(() => {}); }
 });
 
-test("ab-4wh.24: the blanket scope's MCP tool call that runs keeps no unused main Chrome from its stop by use, and the blanket Chrome runs on; a main scope's MCP tool call still keeps the main Chrome", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
+test("ab-4wh.24: the blanket scope's MCP tool call that runs keeps no unused main Chrome from its stop by use, and the blanket Chrome runs on; a main scope's MCP tool call still keeps the main Chrome; ab-4wh.28: the blanket scope's tool call keeps the blanket Chrome from its own stop by use, which comes after the call's end", { skip: process.platform !== "linux", timeout: 120_000 }, async (t) => {
   // The MCP port's reader as in M3 above: each connection of this process walks to the root of the scope that the test
   // names (made-up pids; no real process has them). The test worker (no Playwright, no browser): its browser_wait_for gets
   // no answer, so a call runs until its cancel.
@@ -969,9 +969,7 @@ test("ab-4wh.24: the blanket scope's MCP tool call that runs keeps no unused mai
       return p && pid === process.pid ? { ...p, ppid: walk.parent } : p;
     },
   };
-  // No stop by use of the blanket Chrome (its own signal counts the MCP's own connection, which the test worker never
-  // opens): the test above checks that stop.
-  const x = await svc(t, { blanketIdleOff: true, mcp: { listen: { port: 0 }, port: { reader }, transport: { worker: { heapMb: 64, entry: new URL("./fixtures/mcp-answer-worker.ts", import.meta.url) } } } });
+  const x = await svc(t, { mcp: { listen: { port: 0 }, port: { reader }, transport: { worker: { heapMb: 64, entry: new URL("./fixtures/mcp-answer-worker.ts", import.meta.url) } } } });
   const port = x.mcp!.mcpPort!.port;
   const token = (name: string) => "abt1_" + Buffer.from(`test, not a token: ${name}`, "latin1").toString("base64url");
   const fp = (tok: string) => createHash("sha256").update(tok, "latin1").digest("hex");
@@ -1002,6 +1000,11 @@ test("ab-4wh.24: the blanket scope's MCP tool call that runs keeps no unused mai
   await until(idleStopOf(x, main.pid), "the main Chrome's stop by use", 20_000);
   assert.ok(x.w.alive(blanket.pid), "the blanket Chrome runs on");
   assert.equal(x.mcp!.activity("blanket").calls, 1, "bl's tool call runs on");
+  // The test worker opens no MCP connection to the agent door, so only the tool call can keep the blanket Chrome.
+  const blanketIdle = () => x.logs.some((l) => l.startsWith("blanket: no agent used the blanket Chrome"));
+  x.blanket!.part.idleCheck();
+  await pause(500);
+  assert.ok(!blanketIdle() && x.w.alive(blanket.pid), "bl's tool call keeps the blanket Chrome");
   // web-1's tool call starts the main Chrome at its browser gate, and it keeps the main Chrome while it runs.
   as(ROOT_WEB);
   const webSid = await open("web-1");
@@ -1020,6 +1023,11 @@ test("ab-4wh.24: the blanket scope's MCP tool call that runs keeps no unused mai
   await cancel("bl", blSid, 5);
   await until(() => x.mcp!.activity("blanket").calls === 0, "bl's tool call ends");
   for (const r of [await blCall, await webCall]) assert.match(r.text, /-32800/, "each call gets the cancelled answer");
+  (x.part as any).idleMinutes = 0.02;
+  await until(() => { x.blanket!.part.idleCheck(); return !x.onProfile(x.blanketProfile); }, "the blanket Chrome's stop by use after bl's call", 20_000);
+  (x.part as any).idleMinutes = 10;
+  assert.ok(blanketIdle(), "the stop by use's log line");
+  assert.ok(existsSync(join(x.w.paths.state, "blanket", "profile")), "the folder stays");
 });
 
 test("ab-4wh.8: the daemon's `stop` stops both Chromes and Xvfb, and the folder goes; enabled false: a blanket use starts no Xvfb, and it stops Xvfb alone with the blanket Chrome; with Xvfb alone the service's own stop ends the blanket Chrome and Xvfb", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {

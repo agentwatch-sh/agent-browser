@@ -507,13 +507,13 @@ test("the blanket Chrome's stop by use: after the grace time with no open connec
     assert.deepEqual(chrome.calls, ["start bl", "stop"], "a stop, not an end: the folder stays");
     assert.equal(part.state(), "stopped");
     assert.ok(logs.some((l) => l.includes("no agent used the blanket Chrome for 10 min")));
-    // Traffic is a use: a message of any connection (also an MCP's own) less than the grace time ago keeps it up.
+    // A use less than the grace time ago (`quietFor`: an agent's message or an MCP tool call; board ab-4wh.28) keeps it up.
     assert.equal(await part.wake("bl", async () => null), null);
     now += 900_000; quietFor = 60_000; part.idleCheck();
     assert.ok(chrome.running(), "a message a minute ago is a use");
     quietFor = 700_000; part.idleCheck();
     await settle(); await settle();
-    assert.equal(chrome.running(), false, "an idle MCP session (an open own connection with no traffic) is no use");
+    assert.equal(chrome.running(), false, "no use for the grace time");
   } finally { part.stop(); }
 });
 
