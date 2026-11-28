@@ -685,7 +685,7 @@ the act's input arrives, and it reads the taskport right and two TCC rights.
 
 - `taskport`: `security authorizationdb read system.privilege.taskport` (read only). The class, the rule names (known
   ones by name, else `other`), the group (`_developer`, `admin`, `staff`, `wheel`, else `other`), `authenticateUser`,
-  `shared`, `timeout`, `allowRoot`, `sessionOwner`, `tries`, and `meaning` (`taskportMeaning`, for example "a password
+  `shared`, `timeout`, `allowRoot`, `entitled`, `entitledGroup`, `vpnEntitledGroup` (null when the key is absent), `sessionOwner`, `tries`, and `meaning` (`taskportMeaning`, for example "a password
   once, shared for its timeout": since board ab-v16.97.15 in `src/service/signins/mac-tools.ts`, which the service's
   protected start uses too; parts.ts exports it again). No comment, date or path.
 - `rights`: `screenRecording` and `accessibility` of a program that the seat's shell runs (`helper.ts`:

@@ -215,7 +215,7 @@ test("the taskport right: its fields (no comment, no date) and what they mean fo
   const p = parseTaskport(run(TASKPORT(), 0, { stderr: "YES (0)\n" }));
   assert.deepEqual(p, {
     read: "ok", exit: 0, meaning: "a password once, shared for its timeout",
-    right: { class: "user", rule: null, group: "_developer", authenticateUser: true, shared: true, timeout: 36000, allowRoot: false, sessionOwner: false, tries: 10000, kOfN: null, version: 1, mechanisms: null },
+    right: { class: "user", rule: null, group: "_developer", authenticateUser: true, shared: true, timeout: 36000, allowRoot: false, entitled: null, entitledGroup: null, vpnEntitledGroup: null, sessionOwner: false, tries: 10000, kOfN: null, version: 1, mechanisms: null },
   });
   assert.ok(!JSON.stringify(p).includes("task_for_pid"), "no comment");
   const form = (o: string) => parseTaskport(run(`<plist version="1.0"><dict>${o}</dict></plist>`)).meaning;
