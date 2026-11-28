@@ -34,7 +34,7 @@ const REFUSED: Record<string, any> = Object.fromEntries(V.refused.map((r: any) =
 const FIRST = control.cardPay.events.map((x: any) => x.ev).find((e: any) => e.ev === "pay_request");
 const bytes = (text: string) => Buffer.from(text, "utf8");
 const opens = (s: { sealed: string; sender_public_b64: string }, info: Buffer) => openPaneSeal(s.sealed, s.sender_public_b64, info, PANE);
-/** Node's error of the AEAD at a wrong key: the binding is part of the key schedule (board ab-isz). */
+/** Node's message of an AEAD tag that does not hold (board ab-isz). */
 const NO_OPEN = { message: "Unsupported state or unable to authenticate data" };
 
 test("the vector: TEST keys only, the vectors' first pay_request and its page-order hash, and the two seals of agentwatch's fixture byte for byte", () => {
