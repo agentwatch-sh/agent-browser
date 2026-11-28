@@ -145,6 +145,10 @@ test("the Mac's protected start fails closed: each failed call or check gives th
     // The review's M2: forms that the read does not state in full.
     { name: "no shared key", runs: { taskport: [run(RIGHT("<key>class</key><string>user</string><key>authenticate-user</key><true/>"))] }, failed: "the taskport right does not hold (another form)", toolCalls: 4 },
     { name: "a shared timeout below 0", runs: { taskport: [run(RIGHT("<key>class</key><string>user</string><key>authenticate-user</key><true/><key>shared</key><true/><key>timeout</key><integer>-5</integer>"))] }, failed: "the taskport right does not hold (another form)", toolCalls: 4 },
+    // Board ab-v16.97.17.
+    { name: "no authenticate-user key", runs: { taskport: [run(RIGHT("<key>class</key><string>user</string><key>group</key><string>_developer</string><key>shared</key><true/><key>timeout</key><integer>36000</integer>"))] }, failed: "the taskport right does not hold (another form)", toolCalls: 4 },
+    { name: "a timeout below 0, not shared", runs: { taskport: [run(RIGHT("<key>class</key><string>user</string><key>authenticate-user</key><true/><key>shared</key><false/><key>timeout</key><integer>-5</integer>"))] }, failed: "the taskport right does not hold (another form)", toolCalls: 4 },
+    { name: "a parsed dict with no class", runs: { taskport: [run(RIGHT("<key>authenticate-user</key><true/><key>shared</key><false/>"))] }, failed: "the taskport right does not hold (another form)", toolCalls: 4 },
     { name: "security times out", runs: { taskport: [TIMEOUT] }, failed: "the taskport right cannot be read (security: timeout)", toolCalls: 4 },
     { name: "security gives an unknown text", runs: { taskport: [run("YES (0)\n")] }, failed: "the taskport right cannot be read (security: an unknown text)", toolCalls: 4 },
     { name: "security is missing", runs: { taskport: [NO_TOOL] }, failed: "the taskport right cannot be read (security: no tool)", toolCalls: 4 },
@@ -360,13 +364,13 @@ test("board ab-v16.97.15: what each form of the taskport right means for the pro
   assert.equal(taskportSharedS(parseTaskport(MAC.taskport)), 36000);
   assert.equal(taskportHolds(p("<key>class</key><string>user</string><key>authenticate-user</key><true/><key>shared</key><false/>")), "holds", "a password at each request");
   assert.equal(taskportSharedS(p("<key>class</key><string>user</string><key>authenticate-user</key><true/><key>shared</key><false/>")), null, "not shared");
-  assert.equal(taskportHolds(p("<key>class</key><string>user</string><key>shared</key><true/><key>timeout</key><integer>0</integer>")), "holds", "shared for 0 s: a password at each request");
+  assert.equal(taskportHolds(p("<key>class</key><string>user</string><key>authenticate-user</key><true/><key>shared</key><true/><key>timeout</key><integer>0</integer>")), "holds", "shared for 0 s: a password at each request");
   assert.equal(taskportHolds(p("<key>class</key><string>deny</string>")), "holds", "deny");
-  assert.equal(taskportHolds(p("<key>class</key><string>user</string><key>shared</key><true/><key>timeout</key><integer>600</integer>")), "holds", "a shorter timeout");
+  assert.equal(taskportHolds(p("<key>class</key><string>user</string><key>authenticate-user</key><true/><key>shared</key><true/><key>timeout</key><integer>600</integer>")), "holds", "a shorter timeout");
   assert.equal(taskportSharedS(p("<key>class</key><string>user</string><key>shared</key><true/><key>timeout</key><integer>600</integer>")), 600);
   for (const [body, meaning] of [
-    ["<key>class</key><string>user</string><key>shared</key><true/><key>timeout</key><integer>36001</integer>", "a password once, shared for its timeout"],
-    ["<key>class</key><string>user</string><key>shared</key><true/>", "a password once, shared with no timeout"],
+    ["<key>class</key><string>user</string><key>authenticate-user</key><true/><key>shared</key><true/><key>timeout</key><integer>36001</integer>", "a password once, shared for its timeout"],
+    ["<key>class</key><string>user</string><key>authenticate-user</key><true/><key>shared</key><true/>", "a password once, shared with no timeout"],
     ["<key>class</key><string>user</string><key>authenticate-user</key><false/>", "a group member with no password"],
     ["<key>class</key><string>allow</string>", "allow: no password"],
     ["<key>class</key><string>rule</string><key>rule</key><string>allow</string>", "allow: no password"],
@@ -387,6 +391,19 @@ test("board ab-v16.97.15: what each form of the taskport right means for the pro
     assert.equal(t.meaning, "another form", what);
     assert.equal(taskportHolds(t), "weak", `${what}: does not hold, a latch`);
     assert.equal(taskportSharedS(t), null, `${what}: no shared timeout`);
+  }
+  // Board ab-v16.97.17: on a8ab172 the first four held, and the last two read as "unknown" (no latch).
+  for (const [body, what] of [
+    ["<key>class</key><string>user</string><key>group</key><string>_developer</string><key>shared</key><true/><key>timeout</key><integer>36000</integer>", "no authenticate-user key, the default's other fields"],
+    ["<key>class</key><string>user</string><key>shared</key><false/>", "no authenticate-user key, not shared"],
+    ["<key>class</key><string>user</string><key>authenticate-user</key><string>true</string><key>shared</key><true/><key>timeout</key><integer>600</integer>", "an authenticate-user that is not a flag"],
+    ["<key>class</key><string>user</string><key>authenticate-user</key><true/><key>shared</key><false/><key>timeout</key><integer>-5</integer>", "a timeout below 0, not shared"],
+    ["<key>authenticate-user</key><true/><key>shared</key><true/><key>timeout</key><integer>600</integer>", "no class key"],
+    ["<key>class</key><integer>1</integer><key>authenticate-user</key><true/><key>shared</key><false/>", "a class that is no string"],
+  ] as const) {
+    const t = p(body);
+    assert.equal(t.meaning, "another form", what);
+    assert.equal(taskportHolds(t), "weak", `${what}: does not hold, a latch`);
   }
   // The review's M3: a shared timeout of 0 is 0 (on 0c3b9e4: null); a shared right with no timeout has none.
   assert.equal(taskportSharedS(p("<key>class</key><string>user</string><key>shared</key><true/><key>timeout</key><integer>0</integer>")), 0);
