@@ -727,7 +727,7 @@ test("board ab-dkr: the import line names cookies_out_of_scope only above 0, and
   r.rx.connect();
   await settle();
   const line = "signin: imported a sign-in for site.localhost: 4 cookies set, 2 box cookies dropped, 2 storage keys, 1 databases, 1 cache entries, 0 problems";
-  for (const [kept, end] of [[undefined, ""], [0, ""], [3, ", 3 cookies of other sites kept (the read of Chrome gave them)"], [1, ", 1 cookies of other sites kept (the read of Chrome gave them)"]] as const) {
+  for (const [kept, end] of [[undefined, ""], [0, ""], [3, ", 3 cookies of other sites kept (the read of Chrome gave them)"], [1, ", 1 cookies of other sites kept (the read of Chrome gave them)"], ["3", ""], [-2, ""], [2.5, ""]] as const) {
     r.rx.importCounts = { cookies_removed: 0, ...(kept === undefined ? {} : { cookies_out_of_scope: kept }), cookies_set: 4, tabs_closed: 0, local: 1, session: 1, idb_databases: 1, idb_records: 1, cache_entries: 1, errors: [] };
     r.logs.length = 0;
     assert.deepEqual(await r.req("import", { payload: payload() }), { data: r.rx.importCounts }, `kept ${kept}`);

@@ -11,9 +11,9 @@
 //   3. Chrome installs the receiver in the new profile from the external extensions file, starts the host shim from
 //      the blanket profile's own host manifest, and the shim reaches link-blanket.sock, whose peer check admits it (its
 //      parent is the blanket Chrome); the main link never sees it;
-//   4. the pinned receiver (0.3.15) has no feature `blanket` (C4's "*" comes with 0.3.16): the use gets the too-old
-//      503, no "*" goes, the blanket Chrome stops, and status says why. With a receiver that has the feature, the
-//      client is admitted to the blanket model, and a local host is refused with the public host class's text;
+//   4. the receiver's feature `blanket` decides (C4's "*" comes with 0.3.16): with the feature, the client is admitted
+//      to the blanket model, and a local host is refused with the public host class's text; a receiver without it
+//      gives the use the too-old 503, no "*" goes, the blanket Chrome stops, and status says why;
 //   5. the address proxy (board ab-4wh.6; C11, the blanket profile): no proxy listens before the use; the blanket
 //      Chrome's argv holds the proxy's flags before the chrome_args, and the main Chrome's argv holds none; a tab of the
 //      blanket scope opens http://public.test:<port>/ (Chrome cannot resolve .test: only the proxy can, and its test hook
