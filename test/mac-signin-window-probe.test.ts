@@ -470,6 +470,16 @@ function hold(env: NodeJS.ProcessEnv, signal?: NodeJS.Signals) {
   });
 }
 
+/** /proc/<pid> stays a little after the probe's SIGKILL and exit, until init reaps the stand-in: under load, longer (board ab-v16.97.18). */
+async function gone(pid: number | null, ms = 5000): Promise<boolean> {
+  const end = Date.now() + ms;
+  while (existsSync(`/proc/${pid}`)) {
+    if (Date.now() > end) return false;
+    await new Promise((res) => setTimeout(res, 20));
+  }
+  return true;
+}
+
 test("the cleanup at the time limit (m3): the hold seam's limit stops the stand-in and removes the folder; exit 1 with the JSON", { skip: process.platform !== "linux" }, async () => {
   const tmp = tempDir("ab-swh-");
   try {
@@ -481,7 +491,7 @@ test("the cleanup at the time limit (m3): the hold seam's limit stops the stand-
     assert.deepEqual([r.json.ok, r.json.stage, r.json.reason], [false, "dry-hold", "the time limit of 3 s for the whole run"]);
     assert.deepEqual(r.json.cleanup, { atStop: true, leftAtStop: 1, folderRemoved: true });
     assert.equal(checkResult(r.json), null);
-    assert.equal(existsSync(`/proc/${r.standin}`), false, "the stand-in is gone");
+    assert.ok(await gone(r.standin), "the stand-in is gone");
     assert.deepEqual(readdirSync(tmp), [], "the folder is gone");
   } finally { rmSync(tmp, { recursive: true, force: true }); done(tmp); }
 });
@@ -495,8 +505,7 @@ test("the cleanup at a signal (m3): SIGTERM and SIGHUP while the stand-in holds 
       const r = await hold(env, sig);
       assert.equal(r.code, code, sig);
       assert.ok(Number.isInteger(r.standin), sig);
-      await new Promise((res) => setTimeout(res, 200));
-      assert.equal(existsSync(`/proc/${r.standin}`), false, `${sig}: the stand-in is gone`);
+      assert.ok(await gone(r.standin), `${sig}: the stand-in is gone`);
       assert.deepEqual(readdirSync(tmp), [], `${sig}: the folder is gone`);
     } finally { rmSync(tmp, { recursive: true, force: true }); done(tmp); }
   }
