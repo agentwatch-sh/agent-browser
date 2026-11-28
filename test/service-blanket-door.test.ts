@@ -21,6 +21,7 @@ import { ControlDoor } from "../src/service/control.ts";
 import type { UnitState } from "../src/service/unit/owner.ts";
 import type { UnitDeps } from "../src/service/unit/unit.ts";
 import { BLANKET_FEATURE } from "../src/service/blanket/part.ts";
+import { FAIL_HOLD_TEXT } from "../src/service/unit/part.ts";
 import { FakeReceiver, raw, until } from "./fake-bridge.ts";
 import { DAEMON_HELLO, daemonClient } from "./fake-daemon.ts";
 import { NO_SCOPE, Peer, RootState, sessionRefusal, type PeerReader } from "../src/relay/peer.ts";
@@ -866,7 +867,8 @@ test("ab-4wh.8: the main Chrome's stop by use keeps the blanket Chrome and Xvfb 
     assert.ok(!x.w.alive(main.pid), "the main Chrome stopped");
     assert.ok(x.w.alive(blanket.pid), "the blanket Chrome stays");
     assert.deepEqual(xvfbPids(x), xvfb, "Xvfb stays");
-    assert.ok(x.w.logs.some((l) => l.startsWith(`unit: Xvfb :`) && l.endsWith("stays: the blanket Chrome runs on it")), "the unit's log");
+    assert.deepEqual(x.logs.filter((l) => l.startsWith("unit: no agent used the agent browser")).map((l) => l.replace(/ for [\d.]+ min;/, " for N min;")), ["unit: no agent used the agent browser for N min; stopping Chrome; Xvfb stays for the blanket Chrome (the profile stays)"], "the stop by use's one line of Xvfb (board ab-4wh.25)");
+    assert.ok(![...x.logs, ...x.w.logs].some((l) => l.startsWith("unit: Xvfb :") && l.includes(" stays")), "no second line of Xvfb");
     const st = x.state.status() as any;
     assert.deepEqual([st.state, st.chrome_pid, st.sessions[0].blanket_state], ["off", null, "ready"]);
     // The blanket scope works on: a new connection reaches the blanket receiver, and no main Chrome starts.
@@ -1095,7 +1097,7 @@ test("ab-4wh.8 M1: a service that no longer owns leaves Xvfb, for the next owner
   } finally { await bl.close().catch(() => {}); }
 });
 
-test("ab-4wh.8 M2: in the hold-off after a fail-closed stop, a use of the blanket scope starts no Xvfb and no Chrome, and the state stays failed closed", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
+test("ab-4wh.8 M2: in the hold-off after a fail-closed stop, a use of the blanket scope starts no Xvfb and no Chrome, and the state stays failed closed; board ab-4wh.25: its 503 names the hold-off", { skip: process.platform !== "linux", timeout: 90_000 }, async (t) => {
   const x = await svc(t);
   await x.sessions([session("bl", { blanket: true })]);
   assert.deepEqual(await x.part!.startBrowser(null), { data: {} });
@@ -1104,7 +1106,8 @@ test("ab-4wh.8 M2: in the hold-off after a fail-closed stop, a use of the blanke
   const before = x.w.spawned.length;
   assert.deepEqual([x.w.named("chromium").length, xvfbPids(x).length], [0, 0]);
   const r = await raw(x.url("bl"));
-  assert.equal(r.status, 503, r.body ?? "");
+  assert.deepEqual([r.status, r.body], [503, FAIL_HOLD_TEXT], "the hold-off's text, not a missing Xvfb");
+  assert.equal(FAIL_HOLD_TEXT, "The agent browser is not ready: it closed for safety less than 60 s ago, and it gets ready again at an agent's use after that time.");
   assert.equal(x.w.spawned.length, before, "no Xvfb and no Chrome started in the hold-off");
   assert.equal((x.state.status() as any).state, "failed closed");
 });

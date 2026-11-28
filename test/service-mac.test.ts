@@ -680,6 +680,43 @@ test("board ab-v16.94.35: the stop by use's line on the Mac names Chrome only (t
   }
 });
 
+test("board ab-4wh.25: on Linux the stop by use's line tells Xvfb's fate once, and the stop does what it says: a blanket Chrome that ends, or a blanket start that comes, during the main Chrome's stop changes neither the line nor the stop's choice", async () => {
+  for (const usedAtStart of [true, false]) {
+    const w = new World();
+    try {
+      let used = usedAtStart, mainPid = 0;
+      const part = new UnitPart({
+        paths: w.paths, procs: w.procs, tools: new FakeTools(), owner: new Owner(async () => ({ active: "active", sub: "running", mainPid: process.pid }), () => {}), log: (l) => w.logs.push(l),
+        endpoint: () => ({ form: "pidfd" }), sessionsComplete: () => true, clock: () => w.now,
+        unit: w.deps(new FakeTools(), { displays: { first: 173, last: 175 }, xvfbUser: () => used, kill: (pid, sig) => { if (Math.abs(pid) === mainPid) used = !usedAtStart; w.kill(pid, sig); } }),
+      });
+      part.attach(() => {});
+      part.onConfig({ enabled: true, chrome_bin: "/usr/bin/chromium", chrome_args: [] });
+      await part.unit.start();
+      const xvfb = w.named("Xvfb")[0];
+      mainPid = w.named("chromium")[0].pid;
+      w.now += 10 * 60_000;
+      await (part as any).idleCheck();
+      assert.equal(part.unit.running(), false, "the stop by use ran");
+      assert.equal(used, !usedAtStart, "the use flipped during the stop");
+      const lines = w.logs.filter((l) => l.startsWith("unit: no agent used the agent browser") || (l.startsWith("unit: Xvfb :") && !l.includes("(pid")));
+      if (usedAtStart) {
+        assert.deepEqual(lines, ["unit: no agent used the agent browser for 10 min; stopping Chrome; Xvfb stays for the blanket Chrome (the profile stays)"]);
+        assert.ok(w.alive(xvfb.pid), "Xvfb stays, as the line says");
+        assert.equal(await part.releaseXvfb(), true);
+        assert.ok(!w.alive(xvfb.pid));
+        assert.ok(w.logs.includes(`unit: Xvfb :${xvfb.display} (pid ${xvfb.pid}) stopped: no Chrome runs on it`));
+      } else {
+        assert.deepEqual(lines, ["unit: no agent used the agent browser for 10 min; stopping Chrome and Xvfb (the profile stays)"]);
+        assert.ok(!w.alive(xvfb.pid), "Xvfb stops, as the line says");
+        await part.unit.startForBlanket();
+        assert.deepEqual([w.named("Xvfb").length, w.named("Xvfb")[0].pid !== xvfb.pid], [1, true], "the blanket start after the stop starts its own Xvfb");
+      }
+      await part.stop();
+    } finally { w.close(); }
+  }
+});
+
 // ------------------------------------------------------------------ board ab-xxh: the Mac's end of the agent Chrome
 
 const END_WALL = Date.UTC(2026, 10, 26, 19, 46, 13);

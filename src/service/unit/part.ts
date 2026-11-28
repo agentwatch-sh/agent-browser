@@ -166,6 +166,8 @@ export const USE_WAIT_MS = 60_000;
 export const USE_RETRY_MS = 10_000;
 /** After a fail-closed stop, a use starts Chrome again at most once in this time (the watch's 60 s or more). */
 export const FAIL_HOLD_MS = 60_000;
+/** The 503 of a use of the blanket scope in that time (board ab-4wh.25; I2: it names no stop and no start). */
+export const FAIL_HOLD_TEXT = "The agent browser is not ready: it closed for safety less than 60 s ago, and it gets ready again at an agent's use after that time.";
 const USE_POLL_MS = 100;
 /** The text of a request whose start at a use failed: the start's error text is the reason (I2: it names no command). */
 export const useFailed = (reason: string) => `The agent browser could not get ready: ${reason.replace(/[.\s]+$/, "")}.`;
@@ -642,10 +644,10 @@ export class UnitPart implements ServicePart {
    * a use reaches the stopped Chrome's connections (boards ab-b84.33, ab-b84.34 and ab-b84.36). The drop cannot hit a new
    * Chrome's link: the unit's stop holds its lock, and only microtasks run between its end and the drop.
    */
-  private async stopUnit(why: StopWhy): Promise<boolean> {
+  private async stopUnit(why: StopWhy, begins?: (xvfbStays: boolean) => void): Promise<boolean> {
     this.beforeStop(why);
     // The stop by use keeps the unit's Xvfb while the blanket Chrome runs on it (board ab-4wh.8); every other stop ends it.
-    try { return await this.unit.stop({ keepXvfb: why === "idle" }); }
+    try { return await this.unit.stop({ keepXvfb: why === "idle", ...(begins ? { begins } : {}) }); }
     finally { this.linkDown(); }
   }
 
@@ -933,14 +935,16 @@ export class UnitPart implements ServicePart {
    * A use of the blanket scope on Linux (board ab-4wh.8; C12, the blanket profile): the unit's Xvfb (alone when the main
    * Chrome does not run) and the Chrome that the blanket Chrome runs (unit.ts, startForBlanket); the main Chrome does not
    * start, and its state, its record and its events stay as they are. The rules of a use stay: with the part closed, no
-   * config yet or `enabled: false`, and in the hold-off after a fail-closed stop, it starts nothing (null: the blanket
-   * Chrome's start then finds no Xvfb). A stop that comes during the start (the daemon's `stop`, also during the wait for
-   * an install, or `enabled: false`) is that stop, not a failed start (the review's C1): null, and the blanket part, which
-   * that stop reached too, starts nothing. The answer: null, or the text of a start that failed (`useFailed`).
+   * config yet or `enabled: false`, it starts nothing (null: the blanket Chrome's start then finds no Xvfb), and in the
+   * hold-off after a fail-closed stop it starts nothing and answers FAIL_HOLD_TEXT (board ab-4wh.25). A stop that comes
+   * during the start (the daemon's `stop`, also during the wait for an install, or `enabled: false`) is that stop, not a
+   * failed start (the review's C1): null, and the blanket part, which that stop reached too, starts nothing. The answer:
+   * null, FAIL_HOLD_TEXT, or the text of a start that failed (`useFailed`).
    */
   async wakeForBlanket(): Promise<string | null> {
     const cfg = this.unit.config;
-    if (this.closed || !cfg || !cfg.enabled || this.failClosedHold()) return null;
+    if (this.closed || !cfg || !cfg.enabled) return null;
+    if (this.failClosedHold()) return FAIL_HOLD_TEXT;
     if (!(await this.o.owner.check("a start of Xvfb for the blanket Chrome"))) return useFailed(NOT_OWNER);
     const stops = this.unit.stopCount;
     try { await this.unit.startForBlanket(); return null; }
@@ -1017,12 +1021,12 @@ export class UnitPart implements ServicePart {
     if (!idle()) return; // a use came during the owner check
     const pending = this.mover.updateState() === "pending" ? this.updater.readyVersion() : null;
     const run = (async () => {
-      // The Mac runs no Xvfb (board ab-v16.94.35): its line names Chrome only; the Linux line stays as it was.
-      // Board ab-4wh.8: Xvfb stays while the blanket Chrome runs on it (the unit's stop decides again under its lock).
-      this.o.log(`unit: no agent used the agent browser for ${this.idleMinutes} min; stopping ${this.o.unit.mac ? "Chrome" : this.unit.xvfbShared() ? "Chrome; Xvfb stays for the blanket Chrome" : "Chrome and Xvfb"} (the profile stays)`);
       this.pendingStart = false;
+      // The Mac runs no Xvfb (board ab-v16.94.35): its line names Chrome only; the Linux line stays as it was. Board
+      // ab-4wh.25: the unit's stop gives Xvfb's fate under its lock, the one choice that it acts on.
+      const line = (xvfbStays: boolean) => this.o.log(`unit: no agent used the agent browser for ${this.idleMinutes} min; stopping ${this.o.unit.mac ? "Chrome" : xvfbStays ? "Chrome; Xvfb stays for the blanket Chrome" : "Chrome and Xvfb"} (the profile stays)`);
       // The link of the stopped Chrome goes down before the stop's report and its end (stopUnit; board ab-b84.33).
-      const ran = await this.stopUnit("idle");
+      const ran = await this.stopUnit("idle", line);
       if (ran) this.stopped("idle", null);
       if (ran && pending) this.o.log(`update: the agent browser stopped with no use; its next start runs Google Chrome ${pending}`);
     })();
