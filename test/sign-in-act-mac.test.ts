@@ -64,7 +64,7 @@ test("the sign-in page: one form that posts to its own path, a username field, o
   assert.match(loginPage("not accepted"), /<p>not accepted<\/p>/);
 });
 
-/** The recorder in a stand-in of a page: a 1 ms clock, the 10 ms timer, a frame each 16 ms while visible, one tick a second while hidden. */
+// The stand-in's rates follow Chrome: a frame each 16 ms and the 10 ms timer while visible; no frame and one timer run a second while hidden.
 function page() {
   let now = 0;
   const rafs: (() => void)[] = [], timers: (() => void)[] = [];
@@ -310,7 +310,6 @@ const check = (env: NodeJS.ProcessEnv, args: string[]) => new Promise<{ code: nu
   c.on("close", (code) => { clearTimeout(kill); resolve({ code, stdout, stderr }); });
 });
 
-/** The act's requests as the site sees them, by a stand-in: the page, the post with the run's values and a record, the act's /home, the seat's /seat. */
 async function act(s: Serve, values: TestValues): Promise<void> {
   const host = { Host: `${HOST}:${s.head.port}` };
   const page = await http(s.head.port, "GET", LOGIN_PATH, host);

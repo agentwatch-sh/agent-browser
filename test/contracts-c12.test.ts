@@ -1825,13 +1825,12 @@ const V16_97_15_R1: { why: string; old: string; text: string }[] = [
 const V16_97_17_C12: { why: string; old: string; text: string }[] = [
   { why: "point 1: a class user right with no authenticate-user key does not hold", old: "A form that the read does not state in full (no `shared` key, or a timeout below 0) does not hold.", text: "A form that the read does not state in full (no `authenticate-user` key, no `shared` key, or a timeout below 0) does not hold." },
 ];
-/** A text as board ab-v16.97.17 changed it. */
 const after9717 = (s: string) => {
   let t = flat(s);
   for (const e of V16_97_17_C12) if (t.includes(flat(e.old)) && !t.includes(flat(e.text))) t = t.replace(flat(e.old), flat(e.text));
   return t;
 };
-/** A text as the fix round of board ab-v16.97.15 changed it (and the later boards). */
+/** A text as the fix round of board ab-v16.97.15 changed it. */
 const after9715r1 = (s: string) => {
   let t = flat(s);
   for (const e of V16_97_15_R1) if (t.includes(flat(e.old)) && !t.includes(flat(e.text))) t = t.replace(flat(e.old), flat(e.text));
