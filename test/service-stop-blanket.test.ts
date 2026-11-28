@@ -411,7 +411,7 @@ test("stop --blanket and the exit flag (board ab-4wh.26): only a process whose a
   } finally { v.close(); }
 });
 
-test("board ab-4wh.29: a node process of this user whose arguments read empty and whose exe link cannot be read goes into its exit between the two end checks (at the exe read): it is none; with no exit it stops the command", () => {
+test("board ab-4wh.29: the second end check: a process that goes into its exit at its exe read is none", () => {
   const w = new World();
   try {
     const p = w.add({ argv: [NODE, BIN, "service", "--state-folder", w.paths.state] });
