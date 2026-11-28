@@ -937,7 +937,7 @@ export class UnitPart implements ServicePart {
    * config yet or `enabled: false`, it starts nothing (null: the blanket Chrome's start then finds no Xvfb). A stop that
    * comes during the start (the daemon's `stop`, also during the wait for an install, or `enabled: false`) is that stop,
    * not a failed start (the review's C1): null, and the blanket part, which that stop reached too, starts nothing. The
-   * answer: null, or the text of a start that failed (`useFailed`).
+   * answer: null, FAIL_HOLD_TEXT in the hold-off after a fail-closed stop, or the text of a start that failed (`useFailed`).
    */
   async wakeForBlanket(): Promise<string | null> {
     const cfg = this.unit.config;
