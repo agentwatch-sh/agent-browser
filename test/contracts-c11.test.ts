@@ -947,7 +947,7 @@ test("board ab-4wh.12: the roots of no scope reach the relay's gate under the em
   assert.ok(serviceTs.includes("if (this.noScope.length > 0) out.set(NO_SCOPE, this.noScope.map((r) => ({ ...r })));"), "contextRoots gives them under NO_SCOPE");
   assert.ok(serviceTs.includes("this.takesContextRoots && Array.isArray(req.context_roots)"), "only with the feature");
   const set = serviceTs.slice(serviceTs.indexOf('      case "set_sessions": {'));
-  assert.ok(set.indexOf("this.noScope = unnamed.map(") > 0 && set.indexOf("this.noScope = unnamed.map(") < set.indexOf("this.eachPart((p) => p.setSessions?.(kept));"), "each set_sessions replaces them");
+  assert.ok(set.indexOf("this.noScope = unnamed.map(") > 0 && set.indexOf("this.noScope = unnamed.map(") < set.indexOf("this.eachPart(\"set_sessions\", (p) => p.setSessions?.(kept))"), "each set_sessions replaces them");
   const cases = endpoint.upgradeChecks.filter((c) => c.relay.contextRoots);
   assert.ok(cases.some((c) => c.world === "linux" && c.answer === "session") && cases.some((c) => c.world === "mac" && c.answer === "session"), "a refusal on Linux and in the Mac's form");
 });
