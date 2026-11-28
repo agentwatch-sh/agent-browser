@@ -311,13 +311,13 @@ agent-browser's own commands. The stage holds the same rule in memory:
   points that it chooses itself (a wheel point of the grid, the spread point, the point of its own click), are whole CSS
   px too (`mac.json` `device.wholePx`; board ab-t30.32). The exceptions on the Mac are a client's point, which keeps its
   fraction, and a step that starts at a client's point, which keeps that point's fraction (the step itself is whole px):
-  a press and its release at the client's point, a client's dragEnter, dragOver and drop at the client's point, the
-  notches at the page's last point when that point is the client's, the drag's short first step from a press at the
-  client's point, the release or dragCancel that the end of an action sends at the page's last point when that point is
-  the client's, and the hold's press, its 1 px hand steps and its release at the hand's last point when the page's last
-  point is the client's (for example, the hover sends the client's own move: with no path, or at the in-flight limit)
-  (C11). Where this design says that the stage presses at Playwright's point rounded to a whole px (sections 5.1, 6.2
-  and 10.1), that holds on Linux only; on the Mac the press keeps the client's fraction.
+  a press and its release at the client's point, a client's dragEnter and drop at the client's point, its dragOver when
+  no path goes before it, the notches at the page's last point when that point is the client's, the drag's short first
+  step from a press at the client's point, the release or dragCancel that the end of an action sends at the page's last
+  point when that point is the client's, and the hold's press, its 1 px hand steps and its release at the hand's last
+  point when the page's last point is the client's (for example, the hover sends the client's own move: with no path, or
+  at the in-flight limit) (C11). Where this design says that the stage presses at Playwright's point rounded to a whole
+  px (sections 5.1, 6.2 and 10.1), that holds on Linux only; on the Mac the press keeps the client's fraction.
 
 ### 4.7 When the stage passes a call unchanged
 
@@ -1062,10 +1062,10 @@ then goes at its own time, which can come before the release.
   not pass), and `mac.json` keeps `device.wholePx` true: the probe's fractional move went through the stage's whole-px
   path, so no probe has shown yet that a fraction of a CDP point reaches a page on the Mac. So on the Mac, as C11 says,
   the stage's paths and the points that it chooses itself (a wheel point of the grid, the spread point, the point of its
-  own click) are whole px, and a press and its release at the client's point, a client's dragEnter, dragOver and drop,
-  and the notches at the page's last point when that point is the client's, keep the client's fraction; a step that
-  starts at a client's point keeps that point's fraction (section 4.6). Step B2, the moves of less than 1 px, does not
-  start, because it needs step B1.
+  own click) are whole px, and a press and its release at the client's point, a client's dragEnter and drop, its
+  dragOver when no path goes before it, and the notches at the page's last point when that point is the client's, keep
+  the client's fraction; a step that starts at a client's point keeps that point's fraction (section 4.6). Step B2, the
+  moves of less than 1 px, does not start, because it needs step B1.
 - The harness (ab-t30.2) compares the stage's output with the person's numbers, with the bars of each
   platform (section 13.3).
 - A later recording (another device, another person) gives a new fit, not a new model.
