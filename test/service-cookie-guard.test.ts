@@ -252,6 +252,32 @@ test("board ab-dbm (review M1): over MAX_DOMAINS the oldest entry with no open i
   } finally { g.done(); }
 });
 
+test("board ab-2pz: over MAX_DOMAINS an import whose first count has not run stays, also with an open item at each other entry; after its first count the cap can take it", () => {
+  const counts = new Map<string, number>();
+  const g = rig({ count: (_f, domains) => ({ ok: true, counts: new Map(domains.map((d) => [d, counts.get(d) ?? 0])) }) });
+  try {
+    const name = (i: number) => `d${i}.example`;
+    for (let i = 0; i < MAX_DOMAINS - 1; i++) { g.guard.imported(name(i), 1); counts.set(name(i), 1); g.now.t += 1000; }
+    g.guard.check();
+    for (let i = 0; i < MAX_DOMAINS - 1; i++) counts.set(name(i), 0);
+    g.guard.check();
+    assert.equal(g.guard.losses().length, MAX_DOMAINS - 1, "an open item at each older entry");
+    g.guard.imported("first.example", 1);
+    g.guard.imported("second.example", 1);
+    let kept = g.guard.domains().map((e) => e.domain);
+    assert.equal(kept.length, MAX_DOMAINS + 1);
+    assert.ok(kept.includes("first.example") && kept.includes("second.example"), "both imports stay");
+    assert.equal(g.make().domains().length, MAX_DOMAINS + 1, "a restart keeps both");
+    // After their first count, the next import takes the oldest entry with no open item.
+    counts.set("first.example", 1); counts.set("second.example", 1);
+    g.guard.check();
+    g.guard.imported("third.example", 1);
+    kept = g.guard.domains().map((e) => e.domain);
+    assert.ok(!kept.includes("first.example") && !kept.includes("second.example") && kept.includes("third.example"), kept.slice(-3).join(" "));
+    assert.equal(g.guard.losses().length, MAX_DOMAINS - 1, "each open item stays");
+  } finally { g.done(); }
+});
+
 test("board ab-dbm: no cookie name or value in a log line, the record's file, the status or the sentences", withRig((g) => {
   g.guard.imported("a.example", 3);
   writeCookies(g.profile, ["a.example", "www.a.example", "shop.example"]);

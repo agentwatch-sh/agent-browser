@@ -31,19 +31,21 @@ export const COOKIE_RECORD = "sign-in-cookies.json";
 /** The wait from a trigger (a `ready`, an import) to its check: Chrome writes cookie changes in batches (20 s to 40 s on Linux). */
 export const CHECK_DELAY_MS = 60_000;
 /**
- * The most domains that the record keeps: over it the oldest entry with no open item goes. An entry with an open item of
- * `cookie_loss` stays until the next import of its domain (C12), so with more such entries the record holds more.
+ * The most domains that the record keeps: over it the oldest entry whose first count ran and that has no open item goes.
+ * An entry with an open item of `cookie_loss` stays until the next import of its domain (C12), and an entry whose first
+ * count has not run stays too (board ab-2pz), so the record has no fixed limit: while every check skips (no cookie file,
+ * no node:sqlite, a journal that is not empty), each import adds an entry that stays.
  */
 export const MAX_DOMAINS = 200;
 
 /**
- * The record over MAX_DOMAINS (the review of ab-dbm, M1): the oldest entry with no open item goes, never one with an open
- * item and never `keep` (the import just made); when no entry can go, each stays.
+ * The record over MAX_DOMAINS (the review of ab-dbm, M1; board ab-2pz): only an entry whose first count ran and that has
+ * no open item can go, the oldest first, and never `keep`; when no entry can go, each stays.
  */
 export function capEntries(list: readonly CookieEntry[], keep: CookieEntry | null = null): CookieEntry[] {
   const out = [...list];
   while (out.length > MAX_DOMAINS) {
-    const i = out.findIndex((e) => e.lost === null && e !== keep);
+    const i = out.findIndex((e) => e.lost === null && e.count !== null && e !== keep);
     if (i < 0) break;
     out.splice(i, 1);
   }
