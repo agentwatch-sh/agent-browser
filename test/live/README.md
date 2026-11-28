@@ -130,7 +130,9 @@ agent browser that runs. The Mac peer probe (`mac-peer-probe/probe.ts`) starts n
 reads sockets and processes only. The Mac memory probe (`mac-memory-probe/probe.ts`) starts no Xvfb, no Chromium and no
 browser either: it reads the memory of its own child processes with Apple's tools. The Mac sign-in window probe
 (`mac-signin-window-probe/probe.ts`) starts its own Google Chrome on the Mac's screen, with no Xvfb; its Linux twin seam
-(`AB_SIGNIN_PROBE_TWIN_DISPLAY`) starts Xvfb and Chromium under the guard. (Board ab-v16.9.3 removed the
+(`AB_SIGNIN_PROBE_TWIN_DISPLAY`) starts Xvfb and Chromium under the guard. The Mac live check of the stored sign-ins
+(`sign-in-act-mac/harness.ts`) starts no Xvfb, no Chromium and no browser: it serves a local site, and the seat runs
+the act. (Board ab-v16.9.3 removed the
 harnesses of the CDP proxy and of the agent Chrome that agent-browser started itself: `takeover/`, `background-tabs/`,
 `anti-detect/mac.ts` and its parts, `sheets.ts`, `blank-origin.ts`, `click-download.ts` and `shot-full-size-default.ts`.)
 Before it connects, ends scopes or restarts a relay, the external mode compares CONTROL status's socket with RELAY_SOCK using realpathSync.
@@ -792,6 +794,103 @@ measured: the Mac run checks them) and runs the Linux dry run, the refusal of an
 display, the rights helper off the Mac, and the cleanup seam: `AB_SIGNIN_PROBE_DRY_HOLD=<ms>` (Linux only, never with
 the twin) sets the time limit to `<ms>` and holds the dry run with a stand-in that stays, and the test checks that the
 time limit, SIGTERM and SIGHUP each stop the stand-in and remove the folder. It starts no Chrome, Chromium or Xvfb.
+
+## The Mac live check of the stored sign-ins
+
+`sign-in-act-mac/harness.ts` (board ab-v16.97.17; the design note
+`docs/superpowers/specs/2026-11-26-stored-sign-ins-mac-design.md`, section 8, "The Mac live check", steps 1 to 4) is the
+harness of one on-screen run on the Mac, with the operator at the Mac. A seat session that the manager starts runs it
+from a checkout of the build, after agentwatch's Mac front of the stored sign-ins and the gate `browser.sign_ins` are
+on. `test/live/sign-in-act/` cannot run on the Mac: it needs Xvfb, a test display and the Debian Chrome fixture.
+
+The harness serves a local login site and records what the site sees. It never starts a Chrome, never runs
+`agentwatch`, and opens no site: the seat runs the act and opens the seat page itself. The site is
+`http://login.localhost:48731` (`--port` gives another port), and its server listens on 127.0.0.1 only. It answers
+only the Host `login.localhost:<port>`; every other Host gets 421. Its pages:
+
+- `/login`: one form that posts to `/login` (its own origin), with a text field `u` (`autocomplete="username"`), one
+  password field `p`, a hidden field `rec` and a submit button. The page script records, from the first key to the
+  submit: `visibilityState` and `hasFocus()` at each key and at the submit, the animation frames, the runs of a 10 ms
+  timer, and `isTrusted` of each key, input and pointer event. At the submit it puts the record into `rec`, so the
+  record goes with the form to the site's own origin. The record holds no typed value.
+- A post with the run's test values gets a session cookie and a redirect to `/home`; another post gets the form again
+  with "not accepted".
+- `/home` and `/seat` say "signed in" or "not signed in" by the cookie. The act's redirect loads `/home`; only the seat
+  opens `/seat`.
+
+The test username and password are made up and new for each run (`test-user-` and 12 hex digits, `test-pass-` and 16
+letters and digits: no Shift key, so the act types each character as one key). The run's folder (0700, in the
+system's temp folder) holds them in `run.json` (0600) for `check`, and `site.json` holds what the site saw (flags and
+counts only). The folder goes when the check stops the server, at the time limit (30 minutes, `--minutes` up to 120),
+and at SIGTERM, SIGINT or SIGHUP.
+
+The run, in order:
+
+1. The seat starts the server in the background (it prints one JSON line with `folder`, `port`, `origin`, `pid` and
+   `until`, then the operator's text with the run's test values):
+
+   ```sh
+   node test/live/sign-in-act-mac/harness.ts serve
+   ```
+
+2. The operator, in the Browser pane: adds the scope's list entry `login.localhost`, and adds one stored sign-in with
+   the printed values: Name `mac-live-test`, Origin of the site `http://login.localhost:48731`, Sign-in path `/login`,
+   the printed Username and Password (and the password again), no more origins. The store is unlocked.
+3. The seat runs the act once, and keeps its output and exit in the run's folder:
+
+   ```sh
+   agentwatch browser sign-in mac-live-test > <folder>/answer.txt 2>&1; echo $? > <folder>/answer.exit
+   ```
+
+   Then the seat opens `http://login.localhost:48731/seat` in its own agent browser tab, and asks the operator two
+   questions: "Did a window show on the screen during the sign-in?" and "Did the front app change?". The seat gives
+   each answer as `yes`, `no` or `unsure`, from the operator's words, and runs the check. Each `--scan` names one text
+   of the act for the secret scan: the service's log (the Mac's launchd job writes it to
+   `~/.cache/agentwatch/agent-browser.log`) and agentwatch's sign-in log (`agentwatch-sign-in-log.json` in agentwatch's
+   browser state folder, the fields of the `sign_in` events). These two places come from agentwatch's code; the
+   manager confirms them for the pin. Never scan the server's own output: it prints the test values for the operator.
+
+   ```sh
+   node test/live/sign-in-act-mac/harness.ts check --folder <folder> --window <yes|no|unsure> \
+     --front-changed <yes|no|unsure> --scan ~/.cache/agentwatch/agent-browser.log --scan <sign-in log>
+   ```
+
+   The check prints one JSON document and then stops the server (`--keep` leaves it running).
+4. The operator removes the stored sign-in `mac-live-test` and the list entry `login.localhost` in the Browser pane.
+
+How to read the result:
+
+- `ok`: true only when every check holds. Each check is `{"ok","why"}`: `true` holds, `false` does not, and `null` is
+  not measured (never a pass). `why` uses fixed words and numbers only.
+  - `answer`: the exit is 0 and the output holds C11's success text for the site's origin. A refusal gives its result
+    code (C11's table), never its text.
+  - `page`: the site's record of the act: the page was `visible` at the submit, no key came while it was hidden, every
+    key, input and pointer event was trusted, at least as many keys came as the two values have characters, and from
+    the first key to the submit (at least 500 ms) the page got at least 20 animation frames and 40 timer runs a second.
+    A fill by `Input.insertText` has no key, so the record has no `actMs` and the check is not measured.
+  - `post`: the last post holds both test values.
+  - `seatTab`: a `/seat` after the sign-in loaded signed in (the move of C11).
+  - `scan`: no form of a test value (the act's five forms, also after a percent-decoding) is in the answer or in a
+    `--scan` text, and the scan's twin finds a planted value. A text that could not be read (or is larger than 64 MiB),
+    and a check with no `--scan`, is not measured.
+  - `front`: the operator's answer: `no` holds, `yes` fails.
+- `page`: the record's numbers: `vis`, `focus` and `submitTrusted` at the submit; `keys`, `keysUp`, `inputs`,
+  `pointer`, `untrusted`; `keysVisible` and `keysHidden`, `keysFocus` and `keysNoFocus` (each key's state);
+  `visChanges`, `focusEvents`, `blurEvents`; `actMs`, `actRaf` and `actTicks`. `focus` and `keysNoFocus` show what the
+  site saw of the act window's `focused: false`; no check reads them.
+- `site`: the counts of the sign-in pages, the posts, the `/home` and `/seat` loads, and the requests with another Host.
+- `operator`: `window` and `frontChanged`, as the seat gave them. `window` is a fact, no check: on the Mac the act
+  window is on the screen for the act's seconds (C11).
+- Exit: 0 when `ok` is true; 1 when a check fails or is not measured, or the result fails its own check (no test
+  value, no `/`, `\` or `@`); 2 for an argument or a folder that holds no run of the harness.
+
+Not measured by the harness: the act window with `focused: false` over the operator's own app in real use, and the Dock
+and the window's flash at its create. Only the operator's two answers speak to them.
+
+`test/sign-in-act-mac.test.ts` (in `npm test`) tests the pure parts (`sign-in-act-mac/parts.ts`), runs the page script
+in a stand-in DOM (`node:vm`), and on Linux runs the harness on loopback: `serve`, a stand-in of the act's requests (the
+page, the post with the run's values and a record, `/home`, `/seat`, a wrong Host), `check` with a clean text and with
+a text that holds a test value, the check's stop, `--keep`, SIGTERM, and the folder's removal. It starts no Chrome.
 
 ## The Mac blanket check
 

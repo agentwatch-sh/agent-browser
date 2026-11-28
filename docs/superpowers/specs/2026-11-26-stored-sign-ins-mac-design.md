@@ -498,5 +498,7 @@ The operator's answer on board item ab-58h (confirmed): "Show the sign-in window
 
 Where part 2 differs from this note: a read of either tool at the start that fails or comes late fails the start until
 the service starts again (as each check of the start did before), not only for that reading; a running act does not
-end at a lock (the act opened its values at its start, as on Linux); the Mac live check's harness (step 6) is not built
-yet: the live check comes later through the manager.
+end at a lock (the act opened its values at its start, as on Linux); the Mac live check's harness (step 6) came later,
+with board ab-v16.97.17 (`test/live/sign-in-act-mac/`; test/live/README.md, "The Mac live check of the stored sign-ins"),
+and the live check comes through the manager. Board ab-v16.97.17 also made a class `user` right with no
+`authenticate-user` key fail closed ("another form").
